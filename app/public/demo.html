@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test page</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; padding: 40px 24px 120px;
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 640px; margin-inline: auto;
+    background: #f1f3f5; color: #12161b;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #0e1216; color: #e4eaef; } }
+  h1 { font-size: 22px; letter-spacing: -0.02em; margin: 0 0 4px; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em;
+       color: #626d78; margin: 34px 0 10px; }
+  p.lede { color: #39434d; margin: 0 0 8px; }
+  @media (prefers-color-scheme: dark) { p.lede { color: #b6c1cb; } }
+  .card { background: #fff; border: 1px solid #d6dde3; padding: 18px; margin-bottom: 14px; }
+  @media (prefers-color-scheme: dark) { .card { background: #161c22; border-color: #2c363f; } }
+  label { display: block; font-size: 12px; text-transform: uppercase;
+          letter-spacing: 0.07em; color: #626d78; margin-bottom: 5px; }
+  input { width: 100%; padding: 9px 11px; border: 1px solid #d6dde3;
+          background: transparent; color: inherit; font: inherit; margin-bottom: 12px; }
+  button { font: inherit; font-weight: 600; padding: 9px 16px; cursor: pointer;
+           border: 1px solid #0b5d6b; background: #0b5d6b; color: #fff; margin-right: 8px; }
+  button.plain { background: transparent; color: #0b5d6b; }
+  @media (prefers-color-scheme: dark) { button.plain { color: #7ecad6; } }
+  .hint { font-size: 12.5px; color: #626d78; margin: 6px 0 0; }
+  .err { color: #8c2f2f; font-size: 13px; min-height: 18px; margin-top: 6px; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+</style>
+</head>
+<body>
+
+<h1>Test page</h1>
+<p class="lede">Everything here is designed to trip one of the detectors. Click around, then
+open your dashboard.</p>
+
+<h2>Masking — check the replay</h2>
+<div class="card">
+  <label for="name">Name (opted in with <code>class="swy-unmask"</code>)</label>
+  <input id="name" class="swy-unmask" type="text" placeholder="type your name">
+
+  <label for="pw">Password (always masked, cannot be revealed)</label>
+  <input id="pw" type="password" placeholder="type anything">
+
+  <label for="email">Email (always masked)</label>
+  <input id="email" type="email" placeholder="you@example.com">
+
+  <label for="secret">Marked private with <code>class="swy-mask"</code></label>
+  <input id="secret" class="swy-mask" type="text" placeholder="also masked">
+
+  <p class="hint">Every input is masked by default. Only the first field &mdash; explicitly
+  opted in with <code>swy-unmask</code> &mdash; should show what you typed.</p>
+</div>
+
+<h2>Rage click</h2>
+<div class="card">
+  <button id="broken">This button does nothing</button>
+  <p class="hint">Click it three times fast, within a small area.</p>
+</div>
+
+<h2>Dead click</h2>
+<div class="card">
+  <button class="plain" id="dead">Looks clickable, isn't</button>
+  <p class="hint">One click. Nothing in the page changes, so it's flagged after 1.5s.</p>
+</div>
+
+<h2>Field retry</h2>
+<div class="card">
+  <label for="phone">Phone number (masked by default, like every input)</label>
+  <input id="phone" type="text" placeholder="+44 7700 900000">
+  <div class="err" id="phone-err"></div>
+  <p class="hint">Type an international number, click away, and try again. Three times
+  triggers it — the exact symptom from the worked example.</p>
+</div>
+
+<h2>Errors</h2>
+<div class="card">
+  <button id="throw">Throw an error</button>
+  <button id="reject" class="plain">Reject a promise</button>
+  <button id="fetch404" class="plain">Failing request</button>
+  <p class="hint">These are the highest-value signal: a stack trace names files.</p>
+</div>
+
+<h2>Navigation</h2>
+<div class="card">
+  <button id="nav" class="plain">Change the URL</button>
+  <button id="navq" class="plain">Add a secret query param</button>
+  <p class="hint">The second one adds <code>?token=abc123</code> — check the replay shows it
+  redacted.</p>
+</div>
+
+<h2>Block</h2>
+<div class="card swy-block">
+  <p>This whole card is marked <code>swy-block</code>. It should be a grey box in the replay
+  — not recorded at all.</p>
+</div>
+
+<script>
+  document.getElementById("broken").addEventListener("click", function (e) {
+    e.preventDefault();
+  });
+
+  document.getElementById("dead").addEventListener("click", function (e) {
+    e.preventDefault();
+  });
+
+  // Deliberately rejects anything that isn't 10 digits — the bug from the
+  // worked example in the design doc.
+  var phone = document.getElementById("phone");
+  var phoneErr = document.getElementById("phone-err");
+  phone.addEventListener("blur", function () {
+    if (!phone.value) { phoneErr.textContent = ""; return; }
+    phoneErr.textContent = /^\d{10}$/.test(phone.value)
+      ? ""
+      : "Please enter a valid phone number";
+  });
+
+  document.getElementById("throw").addEventListener("click", function () {
+    setTimeout(function () {
+      throw new Error("Something broke in the checkout flow");
+    }, 0);
+  });
+
+  document.getElementById("reject").addEventListener("click", function () {
+    Promise.reject(new Error("Unhandled rejection from the test page"));
+  });
+
+  document.getElementById("fetch404").addEventListener("click", function () {
+    fetch("/api/definitely-not-here").catch(function () {});
+  });
+
+  document.getElementById("nav").addEventListener("click", function () {
+    history.pushState({}, "", "/demo.html?step=" + Date.now());
+  });
+
+  document.getElementById("navq").addEventListener("click", function () {
+    history.pushState({}, "", "/demo.html?token=abc123&page=2");
+  });
+</script>
+
+<!--
+  The recorder. Replace the key with the one shown after you create a project.
+  In a real install you'd set data-swy-release from your build's git SHA.
+-->
+<script src="/rec.js" data-swy-key="REPLACE_WITH_YOUR_KEY" data-swy-release="demo-local" async></script>
+
+</body>
+</html>

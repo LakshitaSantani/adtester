@@ -1,0 +1,15 @@
+{
+  "name": "simplyyyywhyyy",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Session recording plus causal analysis: what changed, why, and what to do about it.",
+  "workspaces": ["packages/*", "app"],
+  "scripts": {
+    "build:recorder": "npm run build --workspace=@swy/recorder",
+    "dev": "npm run dev --workspace=app",
+    "build": "npm run build:recorder && npm run build --workspace=app",
+    "start": "npm run start --workspace=app",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": { "node": ">=20" }
+}
