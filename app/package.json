@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "worker": "node --experimental-strip-types worker.mjs",
+    "predev": "node ../scripts/db-check.mjs",
+    "db:reset": "node -e \"require('node:fs').rmSync('./data/pg',{recursive:true,force:true})\""
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",

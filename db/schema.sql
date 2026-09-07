@@ -190,3 +190,36 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS jobs_pending
   ON jobs (status, run_after);
+
+-- ================================================================ phase 3
+-- Connecting the code: where commits come from, how the repo is wired, and
+-- what a given URL actually reaches.
+
+CREATE TABLE IF NOT EXISTS repos (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  owner          TEXT NOT NULL,
+  name           TEXT NOT NULL,
+  default_branch TEXT NOT NULL DEFAULT 'main',
+  -- A personal access token pasted by the customer. Fine for design
+  -- partners; becomes a GitHub App installation in phase 6, at which point
+  -- this column holds an installation id instead.
+  access_token   TEXT,
+  last_synced_at TIMESTAMPTZ,
+  last_error     TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, owner, name)
+);
+
+-- The import graph, so we can answer "what code does this route reach?".
+-- Directed: from_path imports to_path.
+CREATE TABLE IF NOT EXISTS code_edges (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  from_path  TEXT NOT NULL,
+  to_path    TEXT NOT NULL,
+  PRIMARY KEY (project_id, from_path, to_path)
+);
+
+CREATE INDEX IF NOT EXISTS code_edges_from ON code_edges (project_id, from_path);
+
+CREATE INDEX IF NOT EXISTS commits_sha_prefix ON commits (project_id, sha);

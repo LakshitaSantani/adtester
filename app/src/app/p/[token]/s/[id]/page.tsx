@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db";
+import Candidates from "./Candidates";
 import Player from "./Player";
 
 export const runtime = "nodejs";
@@ -84,6 +85,8 @@ export default async function SessionPage({
       )}
 
       <Player sessionId={session.id} token={token} />
+
+      <Candidates sessionId={session.id} />
 
       <h2>Details</h2>
       <div className="tablecard">

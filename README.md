@@ -4,7 +4,8 @@ Session recording, and eventually the thing that makes it worth having: an
 explanation of *why* a number moved, with evidence from the code, the docs and
 the meetings that caused it.
 
-**Phase 1 is done and working.** You can record a session and watch it back.
+**Phases 1–3 are done and working.** Record a session, watch it back, connect a
+repository, and see which commits could actually have affected that page.
 
 ---
 
@@ -42,9 +43,47 @@ app/                   Next.js — ingest, dashboard and player in one process
   src/app/api/         session start, event ingest, event streaming
   src/app/p/[token]/   the dashboard and the replay page
   src/lib/storage.ts   the ONLY module that knows where recordings live
+  src/lib/github.ts    commits, diffs, PRs, deployments
+  src/lib/lexicon.ts   routes, aliases, the import graph
+  src/lib/candidates.ts  session -> the commits that could have affected it
+  src/lib/worker.ts    the job loop and its tasks
+  src/lib/jobs.ts      a queue that is just a table
 
-db/schema.sql          all nine tables, including the ones phases 3–6 need
+db/schema.sql          all twelve tables, including the ones phases 4-6 need
+scripts/db-check.mjs   resets the local database if a hard kill damaged it
 ```
+
+## Phase 3 — connecting the code
+
+One GitHub authorisation gives two sources: the commit history (what changed,
+when) and the codebase itself (how the system is wired).
+
+**The lexicon** maps files to what a person would call them. `PhoneInput.tsx`
+gets the aliases "phone input", "phone", "input", so a transcript saying "the
+phone field" can reach it in phase 5. Routes come from framework conventions —
+Next.js app and pages routers, SvelteKit, Remix.
+
+**The import graph** answers the question phase 4 needs: given the URL a
+session was on, which files could possibly be involved? Three hops out from
+the route file, which covers page -> feature component -> shared helper.
+
+**Deploy times** matter more than merge times: code merged Friday and deployed
+Tuesday cannot have broken anything on Monday. They come from GitHub
+Deployments where a team publishes them, and otherwise are inferred from the
+recordings — the first session reporting a build is direct evidence it was
+live by then. That second source is usually the better one, because it
+reflects when code actually reached people.
+
+**What it produces**, entirely from database queries with no model involved:
+
+```
+5 shipped in the window -> 1 route matched /checkout
+                        -> 4 files reachable
+                        -> 2 candidates left
+```
+
+Try it without a GitHub round trip: `POST /api/dev/seed` with your view token
+seeds the worked example from the design docs and returns a session id.
 
 ### The recorder
 
@@ -136,11 +175,6 @@ for real accounts.
 
 ## What's next
 
-Phase 2 is largely done — the detectors landed early because they were cheap
-while the recorder was already open.
-
-- **Phase 3** — GitHub connector: commits, diffs, deploy times, and the repo
-  lexicon that maps "the phone field" to `PhoneInput.tsx`
 - **Phase 4** — the investigator, on exact evidence only: time window, code
   path, counterfactual across builds, confidence, and the three ways to
   decline. This is the product.
@@ -161,3 +195,11 @@ connectors is the shallow version.
 - The job queue is a table in Postgres. No Redis. A failed job is a row you
   can look at.
 - `app/data/` is gitignored — it holds real recordings.
+- The embedded database does not survive a hard kill mid-write. `npm run dev`
+  checks it first and resets it if needed; `npm run db:reset` does it manually.
+  Production sets `DATABASE_URL` and never uses PGlite at all.
+- The worker runs inside the web process locally, because only one process can
+  open PGlite. Changing worker code needs a restart — a hot reload replaces the
+  module but not the loop already running.
+- Unauthenticated GitHub allows 60 requests an hour, which one repo sync will
+  exhaust. Add a token.

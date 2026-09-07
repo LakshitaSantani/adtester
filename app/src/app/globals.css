@@ -225,3 +225,79 @@ button.speed.on {
   color: var(--accent-ink);
   background: var(--accent-wash);
 }
+
+/* ---------- code page ---------- */
+
+.statgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  margin: 22px 0;
+}
+.stat { background: var(--surface); padding: 16px 18px; }
+.stat-n {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.stat-l {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.pill.job-done    { color: var(--good); border-color: var(--good); }
+.pill.job-failed  { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+.pill.job-running,
+.pill.job-pending { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-wash); }
+
+/* ---------- candidate changes ---------- */
+
+.funnel {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  margin: 18px 0;
+  flex-wrap: wrap;
+}
+.funnel-step { background: var(--surface); padding: 14px 18px; flex: 1; min-width: 130px; }
+.funnel-step .n {
+  font-size: 20px; font-weight: 600; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; display: block;
+}
+.funnel-step .l {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted); margin-top: 2px; display: block;
+}
+.funnel-step.final { background: var(--accent-wash); }
+.funnel-step.final .n { color: var(--accent-ink); }
+
+.candidate {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  padding: 14px 18px;
+  margin-bottom: 10px;
+}
+.candidate-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.candidate-sha { font-family: var(--mono); font-size: 12.5px; color: var(--accent-ink); }
+.candidate-msg { font-weight: 600; font-size: 14.5px; }
+.candidate-meta { font-size: 12.5px; color: var(--muted); }
+.candidate-files {
+  margin-top: 8px; font-family: var(--mono); font-size: 11.5px;
+  color: var(--ink-2); line-height: 1.7;
+}
+.candidate-files span { display: block; }

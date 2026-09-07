@@ -88,7 +88,10 @@ export default async function Dashboard({
         <div className="brand">
           simply<span>why</span>
         </div>
-        <div className="muted small mono">{project.name}</div>
+        <span className="small">
+          <span className="muted">sessions · </span>
+          <Link href={`/p/${token}/code`}>code</Link>
+        </span>
       </header>
 
       <h1>Sessions</h1>
