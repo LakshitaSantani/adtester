@@ -6,12 +6,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Seeds the worked example from the design docs, so the candidate filter can
- * be exercised without a GitHub round trip.
+ * Seeds the worked example from the design docs.
  *
- * Worth having beyond testing: it's a reproducible demo, it costs no API
- * quota, and it gives a known-correct answer to check the filter against —
- * which a live repo can't, because nobody knows which commit "should" win.
+ * Worth having beyond testing: it's a reproducible demo, it costs no GitHub
+ * quota, and — the real reason — it gives a *known correct answer* to check
+ * the investigator against. A live repository can't do that, because nobody
+ * knows which commit was actually to blame.
  *
  * Development only.
  */
@@ -20,7 +20,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "not available" }, { status: 404 });
   }
 
-  const { token } = (await request.json()) as { token?: string };
+  const { token, scenario = "split" } = (await request.json()) as {
+    token?: string;
+    scenario?: "split" | "no-split" | "diffuse";
+  };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
   const db = await getDb();
@@ -31,13 +34,18 @@ export async function POST(request: Request) {
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const pid = project.id;
-  for (const table of ["code_edges", "code_entities", "commits"]) {
-    await db.query(`DELETE FROM ${table} WHERE project_id = $1`, [pid]);
+  for (const table of ["evidence", "investigations", "sessions", "code_edges", "code_entities", "commits"]) {
+    await db.query(
+      table === "evidence"
+        ? `DELETE FROM evidence WHERE investigation_id IN (SELECT id FROM investigations WHERE project_id = $1)`
+        : `DELETE FROM ${table} WHERE project_id = $1`,
+      [pid],
+    );
   }
 
   // A small but realistic slice of a checkout flow. The route imports a form,
-  // which imports validation — so validation is reachable at depth 2, and a
-  // change to it is a legitimate suspect for a problem seen on /checkout.
+  // which imports validation — so validation sits two hops from the page, and
+  // a change to it is a legitimate suspect for a problem seen on /checkout.
   const files: Array<[string, string, string | null]> = [
     ["app/checkout/page.tsx", "route", "/checkout"],
     ["app/account/page.tsx", "route", "/account"],
@@ -74,54 +82,117 @@ export async function POST(request: Request) {
   const now = Date.now();
   const at = (hoursAgo: number) => new Date(now - hoursAgo * 3600_000).toISOString();
 
-  // Five commits in the window. Only two touch anything /checkout reaches —
-  // the rest are the noise a real week produces, and the filter's whole job
-  // is to remove them without a model.
+  // Five commits across two deploys, which is what makes this a fair test.
+  //
+  // Deploy times line up with when each build actually appeared: the old
+  // build went out a week ago carrying b7d2e10, and everything since shipped
+  // together in the new build a day ago. That matters, because it means the
+  // form restyle is present in BOTH builds — so there is no comparison to
+  // make for it, and the investigator should notice that and cap its
+  // confidence rather than treating it as a rival explanation.
+  const OLD_BUILD_AT = 168;
+  const NEW_BUILD_AT = 21;
+
   const commits: Array<[string, number, string, string[]]> = [
-    ["a3f91c2", 6, "Tighten phone validation", ["src/checkout/validation.ts"]],
-    ["b7d2e10", 9, "Restyle the checkout form", ["src/checkout/CheckoutForm.tsx"]],
-    ["c1a5f83", 12, "Add avatar upload to profiles", ["src/account/ProfileForm.tsx"]],
-    ["d4b8e29", 20, "Bump analytics sampling", ["src/analytics/tracker.ts"]],
-    ["e9c3a71", 30, "Update the README", ["README.md"]],
+    ["a3f91c2", NEW_BUILD_AT, "Tighten phone validation", ["src/checkout/validation.ts"]],
+    ["c1a5f83", NEW_BUILD_AT, "Add avatar upload to profiles", ["src/account/ProfileForm.tsx"]],
+    ["d4b8e29", NEW_BUILD_AT, "Bump analytics sampling", ["src/analytics/tracker.ts"]],
+    ["e9c3a71", NEW_BUILD_AT, "Update the README", ["README.md"]],
+    ["b7d2e10", OLD_BUILD_AT, "Restyle the checkout form", ["src/checkout/CheckoutForm.tsx"]],
   ];
 
   for (const [sha, hoursAgo, message, touched] of commits) {
     await db.query(
       `INSERT INTO commits
          (project_id, sha, authored_at, deployed_at, author, message, files_touched)
-       VALUES ($1,$2,$3,$3,$4,$5,$6)
-       ON CONFLICT (project_id, sha) DO UPDATE SET
-         deployed_at = EXCLUDED.deployed_at,
-         files_touched = EXCLUDED.files_touched`,
+       VALUES ($1,$2,$3,$3,$4,$5,$6)`,
       [pid, sha, at(hoursAgo), "seed", message, touched],
     );
   }
 
-  // A session on /checkout, on the build that carries the validation change.
-  const sessionId = newSessionId();
-  await db.query(
-    `INSERT INTO sessions
-       (id, project_id, release, started_at, last_event_at, entry_url,
-        user_agent, event_count, signatures, error_count)
-     VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9)`,
-    [
-      sessionId,
-      pid,
-      "a3f91c2",
-      at(2),
-      "https://shop.example.com/checkout",
-      "Mozilla/5.0 (Macintosh) Chrome/140",
-      142,
-      ["field_retry"],
-      0,
-    ],
+  // Sessions, arranged so a real counterfactual exists.
+  //
+  // Two builds are live at the same time, which is the situation the whole
+  // test depends on: most users are on the new build, a slice are still being
+  // served the old one from cache. Were everyone on the same build there
+  // would be nothing to compare, and the investigator would have to cap its
+  // confidence and say why.
+  const make = async (
+    release: string,
+    startHoursAgo: number,
+    spreadHours: number,
+    count: number,
+    affected: number,
+    path: string,
+  ) => {
+    for (let i = 0; i < count; i++) {
+      const offset = (i / Math.max(1, count)) * spreadHours;
+      await db.query(
+        `INSERT INTO sessions
+           (id, project_id, release, started_at, last_event_at, entry_url,
+            user_agent, event_count, signatures, error_count)
+         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,0)`,
+        [
+          newSessionId(),
+          pid,
+          release,
+          at(startHoursAgo - offset),
+          `https://shop.example.com${path}`,
+          "Mozilla/5.0 (Macintosh) Chrome/140",
+          120 + i,
+          i < affected ? ["field_retry"] : [],
+        ],
+      );
+    }
+  };
+
+  // Last week on the old build: the phone field almost never troubled anyone.
+  await make("b7d2e10", OLD_BUILD_AT, 140, 60, 1, "/checkout");
+
+  if (scenario === "diffuse") {
+    // The same signature all over the site. Nothing about one page's code can
+    // explain that, so the investigator should refuse rather than blame a
+    // commit that happens to have shipped nearby.
+    for (const path of ["/checkout", "/account", "/search", "/cart", "/help"]) {
+      await make("a3f91c2", NEW_BUILD_AT, 20, 12, 7, path);
+    }
+  } else if (scenario === "no-split") {
+    // Everyone moved to the new build at once — the common case for teams
+    // that don't do gradual rollouts. There is no control group, so the
+    // strongest signal is unavailable and confidence must be capped.
+    await make("a3f91c2", NEW_BUILD_AT, 20, 55, 23, "/checkout");
+  } else {
+    // Since the validation change went out, on the new build: it does.
+    await make("a3f91c2", NEW_BUILD_AT, 20, 40, 22, "/checkout");
+    // Still on the old build over the same hours — the control group.
+    await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout");
+  }
+
+  const probe = await db.one<{ id: string }>(
+    `SELECT id FROM sessions
+      WHERE project_id = $1 AND release = 'a3f91c2' AND 'field_retry' = ANY(signatures)
+      ORDER BY started_at DESC LIMIT 1`,
+    [pid],
   );
 
+  const expectations: Record<string, string> = {
+    "no-split":
+      "Everyone is on the new build, so there is no control group. a3f91c2 should " +
+      "still lead, but confidence must be capped at 0.70 and the report must say why.",
+    diffuse:
+      "The signature is on five different pages. The investigator should decline " +
+      "rather than blame a commit behind any one of them.",
+  };
+
   return NextResponse.json({
-    sessionId,
+    scenario,
+    sessionId: probe?.id ?? null,
     commitsSeeded: commits.length,
-    expectation:
-      "Two of five commits touch code /checkout reaches: a3f91c2 (validation) " +
-      "and b7d2e10 (the form itself).",
+    expectation: expectations[scenario] ??
+      "Two of five commits touch code /checkout reaches: a3f91c2 (validation) and " +
+      "b7d2e10 (the form). The counterfactual should separate them — 55% of sessions " +
+      "on the new build hit the field-retry signature against ~7% of those still on " +
+      "the old one — so a3f91c2 should win with high confidence. b7d2e10 is in " +
+      "both builds, so it has no version split at all and should be capped at 0.70.",
   });
 }

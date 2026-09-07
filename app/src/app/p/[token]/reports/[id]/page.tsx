@@ -1,0 +1,192 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { getDb } from "@/lib/db";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type EvidenceRow = {
+  id: string;
+  kind: string;
+  ref: string | null;
+  quote: string | null;
+  detail: Record<string, unknown> | string;
+  contribution: number | null;
+};
+
+const DECLINE_EXPLAIN: Record<string, string> = {
+  diffuse:
+    "The symptom appears on too many different pages to be traced to the code behind any one of them.",
+  no_candidates:
+    "Nothing that shipped in the window touches code this page reaches.",
+  tied_candidates:
+    "More than one change fits the evidence equally well, and separating them would be a guess.",
+  low_confidence: "A leading candidate exists, but the evidence behind it is too thin to assert.",
+};
+
+function parse(detail: Record<string, unknown> | string): Record<string, unknown> {
+  if (typeof detail === "string") {
+    try {
+      return JSON.parse(detail) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return detail ?? {};
+}
+
+export default async function ReportPage({
+  params,
+}: {
+  params: Promise<{ token: string; id: string }>;
+}) {
+  const { token, id } = await params;
+  const db = await getDb();
+
+  const inv = await db.one<{
+    id: string;
+    symptom: string;
+    symptom_started: string | null;
+    status: string;
+    claim: string | null;
+    commit_sha: string | null;
+    confidence: number | null;
+    declined_reason: string | null;
+    created_at: string;
+  }>(
+    `SELECT i.* FROM investigations i
+       JOIN projects p ON p.id = i.project_id
+      WHERE i.id = $1 AND p.view_token = $2`,
+    [id, token],
+  );
+  if (!inv) notFound();
+
+  const evidence = await db.query<EvidenceRow>(
+    `SELECT id, kind, ref, quote, detail, contribution
+       FROM evidence WHERE investigation_id = $1`,
+    [id],
+  );
+
+  const sessions = evidence.filter((e) => e.kind === "session");
+  const commits = evidence
+    .filter((e) => e.kind === "commit")
+    .sort((a, b) => (b.contribution ?? 0) - (a.contribution ?? 0));
+
+  const signalsFor = (sha: string) =>
+    evidence.filter(
+      (e) => (e.kind === "signal" || e.kind === "counterfactual") && e.ref === sha,
+    );
+
+  const winner = inv.commit_sha;
+  const capped = commits.some((c) => parse(c.detail).capped === true);
+
+  return (
+    <div className="wrap wide">
+      <header className="top">
+        <div className="brand">
+          simply<span>why</span>
+        </div>
+        <Link href={`/p/${token}/reports`} className="small">
+          ← all reports
+        </Link>
+      </header>
+
+      <div className="report-head">
+        <div className="eyebrow-line">{inv.symptom}</div>
+        <h1>{inv.claim}</h1>
+        {inv.status === "claimed" && (
+          <div className="confidence-line">
+            <span className="conf big">{(inv.confidence ?? 0).toFixed(2)}</span>
+            <span className="muted small">
+              confidence{capped ? " · capped, see below" : ""}
+            </span>
+          </div>
+        )}
+        {inv.status === "declined" && (
+          <div className="note">
+            <b>No answer given.</b>{" "}
+            {DECLINE_EXPLAIN[inv.declined_reason ?? ""] ?? "The evidence didn't support a claim."}
+          </div>
+        )}
+      </div>
+
+      <h2>The evidence</h2>
+
+      {sessions.length > 0 && (
+        <div className="ev-block">
+          <div className="ev-kind">Recordings</div>
+          <div className="ev-body">
+            {sessions.length} session{sessions.length > 1 ? "s" : ""} showing this. Watch one
+            and see it happen:
+            <div className="ev-links">
+              {sessions.slice(0, 8).map((s) => (
+                <Link key={s.id} href={`/p/${token}/s/${s.ref}`} className="mono small">
+                  {String(s.ref).slice(0, 8)}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {commits.map((c) => {
+        const detail = parse(c.detail);
+        const isWinner = c.ref === winner;
+        const matched = (detail.matchedFiles as string[]) ?? [];
+        return (
+          <div key={c.id} className={`ev-block candidate-block ${isWinner ? "winner" : ""}`}>
+            <div className="ev-kind">
+              {isWinner ? "Cause" : "Also considered"}
+              <span className="ev-score mono">{(c.contribution ?? 0).toFixed(2)}</span>
+            </div>
+            <div className="ev-body">
+              <div className="candidate-head">
+                <span className="candidate-sha">{String(c.ref).slice(0, 8)}</span>
+                <span className="candidate-msg">{c.quote}</span>
+              </div>
+              <div className="candidate-meta">
+                {(detail.author as string) ?? "unknown"} ·{" "}
+                {matched.length} of {String(detail.filesTouched ?? "?")} changed files on this
+                page&apos;s path
+              </div>
+              <div className="candidate-files">
+                {matched.slice(0, 5).map((f) => (
+                  <span key={f}>{f}</span>
+                ))}
+              </div>
+
+              <table className="signals">
+                <tbody>
+                  {signalsFor(String(c.ref)).map((s) => {
+                    const sd = parse(s.detail);
+                    const contribution = s.contribution ?? 0;
+                    return (
+                      <tr key={s.id}>
+                        <th>{String(sd.label ?? sd.signal ?? "signal")}</th>
+                        <td>{s.quote}</td>
+                        <td
+                          className={`mono right ${contribution < 0 ? "neg" : contribution > 0 ? "pos" : "muted"}`}
+                        >
+                          {contribution >= 0 ? "+" : ""}
+                          {contribution.toFixed(2)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="note">
+        <b>How to read the numbers.</b> Only the counterfactual — comparing users who got a
+        change against users who didn&apos;t — can push confidence above 0.70. Everything else
+        is circumstantial: plenty of changes ship before a problem and touch code the page
+        uses. When a change went to everyone at once there is no comparison to make, so the
+        score is capped and says so.
+      </div>
+    </div>
+  );
+}

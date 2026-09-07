@@ -91,6 +91,8 @@ export default async function Dashboard({
         <span className="small">
           <span className="muted">sessions · </span>
           <Link href={`/p/${token}/code`}>code</Link>
+          <span className="muted"> · </span>
+          <Link href={`/p/${token}/reports`}>reports</Link>
         </span>
       </header>
 

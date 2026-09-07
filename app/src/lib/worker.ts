@@ -19,6 +19,7 @@ import { createGunzip } from "node:zlib";
 import { candidatesForSession } from "./candidates";
 import { getDb } from "./db";
 import * as gh from "./github";
+import { investigate } from "./investigate";
 import { claimNext, fail, finish, type Job } from "./jobs";
 import {
   classify,
@@ -30,6 +31,7 @@ import {
   saveLexicon,
   type Entity,
 } from "./lexicon";
+import { describeSymptom, detectSymptoms } from "./symptoms";
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -179,6 +181,49 @@ async function indexRepo(job: Job): Promise<void> {
   }
 }
 
+/**
+ * Look for new symptoms and investigate them.
+ *
+ * One at a time, most-affected first. Investigating everything at once would
+ * bury the thing that matters under a list, and the whole point is to hand
+ * someone a short answer rather than another dashboard.
+ */
+async function runInvestigations(job: Job): Promise<void> {
+  const db = await getDb();
+  const symptoms = await detectSymptoms(job.project_id);
+
+  if (symptoms.length === 0) {
+    console.log("investigate: nothing new to look into");
+    return;
+  }
+
+  const limit = Number(job.payload.limit ?? 3);
+  let done = 0;
+
+  for (const symptom of symptoms.slice(0, limit)) {
+    // Don't re-investigate something already reported. A symptom that keeps
+    // going is the same symptom, and a stream of duplicates is how a useful
+    // product turns into noise someone mutes.
+    const existing = await db.one<{ id: string }>(
+      `SELECT id FROM investigations
+        WHERE project_id = $1 AND symptom = $2
+          AND created_at > now() - interval '24 hours'`,
+      [job.project_id, describeSymptom(symptom)],
+    );
+    if (existing) continue;
+
+    const result = await investigate(job.project_id, symptom);
+    done += 1;
+    console.log(
+      `investigate: ${result.symptom} -> ${result.status}` +
+        (result.confidence !== null ? ` (${result.confidence.toFixed(2)})` : "") +
+        (result.declinedReason ? ` [${result.declinedReason}]` : ""),
+    );
+  }
+
+  if (done === 0) console.log("investigate: all current symptoms already reported");
+}
+
 async function inferDeploys(job: Job): Promise<void> {
   const count = await inferDeployTimes(job.project_id);
   console.log(`infer_deploys: filled ${count} deploy times`);
@@ -256,6 +301,7 @@ const HANDLERS: Record<string, (job: Job) => Promise<void>> = {
   sync_repo: syncRepo,
   index_repo: indexRepo,
   infer_deploys: inferDeploys,
+  investigate: runInvestigations,
 };
 
 // Same reasoning as the database singleton: a hot reload must not start a

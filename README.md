@@ -4,8 +4,9 @@ Session recording, and eventually the thing that makes it worth having: an
 explanation of *why* a number moved, with evidence from the code, the docs and
 the meetings that caused it.
 
-**Phases 1–3 are done and working.** Record a session, watch it back, connect a
-repository, and see which commits could actually have affected that page.
+**Phases 1–4 are done and working.** Record a session, watch it back, connect a
+repository, and get a report saying which change caused a problem — with the
+evidence behind it, and an honest refusal when the evidence isn't there.
 
 ---
 
@@ -46,6 +47,10 @@ app/                   Next.js — ingest, dashboard and player in one process
   src/lib/github.ts    commits, diffs, PRs, deployments
   src/lib/lexicon.ts   routes, aliases, the import graph
   src/lib/candidates.ts  session -> the commits that could have affected it
+  src/lib/symptoms.ts    what started going wrong, and where
+  src/lib/counterfactual.ts  the same symptom on builds with and without a change
+  src/lib/confidence.ts  six named signals, and the cap
+  src/lib/investigate.ts the pipeline, and the three ways it refuses
   src/lib/worker.ts    the job loop and its tasks
   src/lib/jobs.ts      a queue that is just a table
 
@@ -173,11 +178,53 @@ for real accounts.
 
 ---
 
+## Phase 4 — the investigator
+
+The product. Finds a symptom, narrows the suspects, and either names a cause
+with a confidence score or explains why it can't.
+
+**Nothing here uses a model.** Every step is a database query over exact
+edges. That's deliberate: if the causal core is wrong, richer storytelling on
+top only makes it wrong more convincingly.
+
+**Where the number comes from.** Six named signals, each stored as its own row
+so the breakdown is inspectable and old investigations can be re-scored when
+the weights improve:
+
+```
+Counterfactual   55% of 40 sessions with the change hit this, vs 7% of 15 without  +0.45
+Code path        1 of 1 changed files are on this page's path                      +0.20
+Onset            the symptom started 1.0 hours after this deployed                 +0.20
+Volume           23 sessions affected                                              +0.12
+Other candidates 1 other change could explain this equally well                    -0.08
+                                                                                    0.89
+```
+
+**Only the counterfactual can license high confidence.** Everything else is
+circumstantial — plenty of changes ship before a problem and touch code the
+page uses. When everyone moved to the new build at once there is no comparison
+to make, so the score is capped at 0.70 and the report says why.
+
+The same seeded scenario, three ways:
+
+| Scenario | Result |
+|---|---|
+| Some users still on the old build | **claimed, 0.89** — the real cause wins; the decoy commit, present in both builds, gets no counterfactual and drops to 0.35 |
+| Everyone on the new build at once | **claimed, 0.58** — capped, and it says so |
+| Signature on five different pages | **declined** — can't be pinned to any one page's code |
+
+Try all three: `POST /api/dev/seed` with `{"scenario": "split" | "no-split" | "diffuse"}`.
+
+**It refuses in four situations**, and that's the point: too widespread to pin
+down, nothing shipped that touches the page, candidates that can't be
+separated, and evidence too thin to assert. A product that always answers is a
+product that is often wrong — and with engineers as the audience, one
+confidently wrong root cause ends the relationship.
+
+---
+
 ## What's next
 
-- **Phase 4** — the investigator, on exact evidence only: time window, code
-  path, counterfactual across builds, confidence, and the three ways to
-  decline. This is the product.
 - **Phase 5** — PRDs and transcripts, so a report can say *"Priya raised this
   in the Sept 4 planning call"*
 - **Phase 6** — real accounts, fix suggestions as diffs, and a hit-rate page

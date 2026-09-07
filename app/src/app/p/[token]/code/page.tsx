@@ -104,7 +104,8 @@ export default async function CodePage({
         </div>
         <span className="small">
           <Link href={`/p/${token}`}>sessions</Link>
-          <span className="muted"> · code</span>
+          <span className="muted"> · code · </span>
+          <Link href={`/p/${token}/reports`}>reports</Link>
         </span>
       </header>
 
