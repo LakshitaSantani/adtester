@@ -486,3 +486,9 @@ select {
 .ev-block.market-block { border-left: 3px solid var(--muted); }
 .market-block .candidate-msg { font-weight: 600; font-size: 14.5px; }
 .market-block a { text-decoration: underline; }
+
+/* ---------- cohorts ---------- */
+
+.ev-block.cohort-block { border-left: 3px solid var(--guard); }
+.cohort-block .ev-score { color: var(--guard); }
+.cohort-block .candidate-msg { font-weight: 600; font-size: 15px; }

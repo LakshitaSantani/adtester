@@ -14,6 +14,7 @@
 
 import { analyse, fetchFileContents, type Analysis } from "./analyst";
 import { candidatesForSession, type Candidate } from "./candidates";
+import { describeConcentration, qualifier } from "./cohorts";
 import { score, type Scored } from "./confidence";
 import { testCounterfactual, type Counterfactual } from "./counterfactual";
 import { decrypt } from "./crypto";
@@ -375,7 +376,13 @@ function weakestLink(scored: Scored): string {
 function buildClaim(candidate: Candidate, symptom: Symptom): string {
   const what = symptom.signature.replace(/_/g, " ");
   const where = symptom.path ? ` on ${symptom.path}` : "";
-  return `${candidate.message} (${candidate.sha.slice(0, 8)}) introduced ${what}${where}.`;
+  // The cohort belongs in the headline, not only in the evidence below it.
+  // "broke checkout" and "broke checkout on Safari" send someone to different
+  // places, and the headline is the line most people will read.
+  const who = qualifier(symptom.concentrations);
+  return `${candidate.message} (${candidate.sha.slice(0, 8)}) introduced ${what}${where}${
+    who ? `, ${who}` : ""
+  }.`;
 }
 
 /**
@@ -395,6 +402,22 @@ async function saveEvidence(
   await db.query(`DELETE FROM evidence WHERE investigation_id = $1`, [investigationId]);
 
   if (symptom) {
+    // Who it hits, before the list of who to watch. A concentration is often
+    // the most actionable line in the whole report.
+    for (const c of symptom.concentrations.slice(0, 3)) {
+      await db.query(
+        `INSERT INTO evidence (id, investigation_id, kind, ref, quote, detail, contribution)
+         VALUES ($1,$2,'cohort',$3,$4,$5,NULL)`,
+        [
+          newId("ev"),
+          investigationId,
+          `${c.dimension}:${c.value}`,
+          describeConcentration(c),
+          JSON.stringify(c),
+        ],
+      );
+    }
+
     for (const sessionId of symptom.sessionIds.slice(0, 10)) {
       await db.query(
         `INSERT INTO evidence (id, investigation_id, kind, ref, quote, detail)

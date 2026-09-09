@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -115,6 +115,24 @@ export async function POST(request: Request) {
   // served the old one from cache. Were everyone on the same build there
   // would be nothing to compare, and the investigator would have to cap its
   // confidence and say why.
+  /**
+   * Which browser a seeded session used.
+   *
+   * The "safari" scenario makes the failure land almost entirely on Safari
+   * while Safari stays a minority of traffic — the shape a compatibility bug
+   * actually has, and the one that looks universal without cohort analysis.
+   */
+  const browserFor = (i: number, affectedCount: number, sc: string): string => {
+    const safari = "Mozilla/5.0 (Macintosh; Intel Mac OS X) Version/17.0 Safari/605.1";
+    const chrome = "Mozilla/5.0 (Macintosh) Chrome/140";
+    if (sc !== "safari") return i % 3 === 0 ? safari : chrome;
+    // Affected sessions are seeded first within each batch, so index against
+    // that batch's own count rather than a fixed number — otherwise a smaller
+    // batch comes out entirely Safari and the cohort stops being a minority,
+    // which is the whole thing the scenario is meant to demonstrate.
+    return i < affectedCount ? safari : chrome;
+  };
+
   const make = async (
     release: string,
     startHoursAgo: number,
@@ -142,7 +160,7 @@ export async function POST(request: Request) {
           release,
           at(startHoursAgo - offset),
           `https://shop.example.com${entryPath ?? path}`,
-          "Mozilla/5.0 (Macintosh) Chrome/140",
+          browserFor(i, affected, scenario),
           120 + i,
           i < affected ? ["field_retry"] : [],
           // Where the signature actually fired, which is the point.
@@ -171,6 +189,10 @@ export async function POST(request: Request) {
     // homepage's code and find nothing.
     await make("a3f91c2", NEW_BUILD_AT, 20, 40, 22, "/checkout", "/");
     await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout", "/");
+  } else if (scenario === "safari") {
+    // Same volume as the normal case, but the failures cluster on one browser.
+    await make("a3f91c2", NEW_BUILD_AT, 20, 40, 22, "/checkout");
+    await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout");
   } else if (scenario === "priority") {
     // A small problem where money changes hands, and a bigger one that costs
     // nothing. Ranked by volume alone the help page wins, which is exactly the
@@ -206,6 +228,10 @@ export async function POST(request: Request) {
     "no-split":
       "Everyone is on the new build, so there is no control group. a3f91c2 should " +
       "still lead, but confidence must be capped at 0.70 and the report must say why.",
+    safari:
+      "The failures land almost entirely on Safari while Safari stays a minority " +
+      "of traffic. Without cohort analysis this is indistinguishable from a " +
+      "universal bug; it should now say so in the symptom itself.",
     priority:
       "8 people stuck in checkout against 34 annoyed by the help page. Without a " +
       "profile the help page ranks first; with /checkout marked critical it should " +

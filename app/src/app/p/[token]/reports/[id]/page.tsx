@@ -81,6 +81,7 @@ export default async function ReportPage({
   const intent = evidence.filter((e) => e.kind === "prd" || e.kind === "transcript");
   const analysis = evidence.find((e) => e.kind === "analysis");
   const market = evidence.filter((e) => e.kind === "market");
+  const cohorts = evidence.filter((e) => e.kind === "cohort");
   const a = analysis ? parse(analysis.detail) : null;
   const fix = (a?.fix ?? null) as Record<string, unknown> | null;
   const commits = evidence
@@ -161,6 +162,33 @@ export default async function ReportPage({
               </div>
             )}
           </div>
+        </>
+      )}
+
+      {cohorts.length > 0 && (
+        <>
+          <h2>Who it happens to</h2>
+          <p className="lede small">
+            Compared against everyone else on the same page — a cohort that is 80% of the
+            problem and also 80% of your traffic would be telling you nothing.
+          </p>
+          {cohorts.map((c) => {
+            const d = parse(c.detail);
+            return (
+              <div key={c.id} className="ev-block cohort-block">
+                <div className="ev-kind">
+                  {String(d.dimension ?? "")}
+                  <span className="ev-score mono">{Number(d.lift ?? 0).toFixed(1)}x</span>
+                </div>
+                <div className="ev-body">
+                  <div className="candidate-msg">{String(d.value ?? "")}</div>
+                  <div className="small" style={{ marginTop: 4 }}>
+                    {c.quote}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </>
       )}
 
