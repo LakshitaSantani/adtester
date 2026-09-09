@@ -94,8 +94,9 @@ async function syncRepo(job: Job): Promise<void> {
   for (const c of commits) {
     await db.query(
       `INSERT INTO commits
-         (project_id, sha, authored_at, author, message, pr_number, pr_title, pr_body, files_touched)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         (project_id, sha, authored_at, author, message, pr_number, pr_title, pr_body,
+          files_touched, parents)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (project_id, sha) DO UPDATE SET
          authored_at = EXCLUDED.authored_at,
          author = EXCLUDED.author,
@@ -103,7 +104,8 @@ async function syncRepo(job: Job): Promise<void> {
          pr_number = EXCLUDED.pr_number,
          pr_title = EXCLUDED.pr_title,
          pr_body = EXCLUDED.pr_body,
-         files_touched = EXCLUDED.files_touched`,
+         files_touched = EXCLUDED.files_touched,
+         parents = EXCLUDED.parents`,
       [
         job.project_id,
         c.sha,
@@ -114,6 +116,7 @@ async function syncRepo(job: Job): Promise<void> {
         c.prTitle,
         c.prBody,
         c.filesTouched,
+        c.parents,
       ],
     );
   }

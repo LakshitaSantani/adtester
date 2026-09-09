@@ -350,3 +350,16 @@ CREATE INDEX IF NOT EXISTS market_events_when
 -- network, so without this a Python or Go regression is invisible no matter
 -- how well the repository is indexed.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS api_paths TEXT[] NOT NULL DEFAULT '{}';
+
+-- Which commits each commit descends from.
+--
+-- Without this, "does this build contain that change?" can only be answered
+-- from timestamps, which assumes history is a line. It isn't: a cherry-pick
+-- puts a change into a build whose commit is older than the change, and a
+-- rollback re-serves a build that timestamps say came later. Both make the
+-- counterfactual compare the wrong two groups and report the result with
+-- full confidence.
+--
+-- Costs nothing to collect: the sync already fetches each commit's detail for
+-- its file list, and the parents are in the same response.
+ALTER TABLE commits ADD COLUMN IF NOT EXISTS parents TEXT[] NOT NULL DEFAULT '{}';

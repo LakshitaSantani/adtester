@@ -18,6 +18,8 @@ export type RepoRef = { owner: string; name: string; token?: string | null };
 
 export type CommitRecord = {
   sha: string;
+  /** The commits this one descends from. Two of them for a merge. */
+  parents: string[];
   authoredAt: string | null;
   author: string | null;
   message: string;
@@ -106,16 +108,18 @@ export async function listCommits(
 
   for (const item of list.slice(0, limit)) {
     let filesTouched: string[] = [];
+    let parents: string[] = [];
     let prNumber: number | null = null;
     let prTitle: string | null = null;
     let prBody: string | null = null;
 
     try {
-      const detail = await gh<{ files?: Array<{ filename: string }> }>(
-        repo,
-        `/repos/${repo.owner}/${repo.name}/commits/${item.sha}`,
-      );
+      const detail = await gh<{
+        files?: Array<{ filename: string }>;
+        parents?: Array<{ sha: string }>;
+      }>(repo, `/repos/${repo.owner}/${repo.name}/commits/${item.sha}`);
       filesTouched = (detail.files ?? []).map((f) => f.filename);
+      parents = (detail.parents ?? []).map((p) => p.sha);
     } catch {
       // A commit whose detail we can't read is still worth recording — we
       // just can't use it for code-path filtering.
@@ -137,6 +141,7 @@ export async function listCommits(
 
     out.push({
       sha: item.sha,
+      parents,
       authoredAt: item.commit.author?.date ?? null,
       author: item.author?.login ?? item.commit.author?.name ?? null,
       message: item.commit.message,

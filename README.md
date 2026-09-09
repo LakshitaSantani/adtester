@@ -270,12 +270,14 @@ The same seeded scenario, three ways:
 | Everyone on the new build at once | **claimed, 0.85** — no control group, so it compares the page before and after the deploy, capped, and it says so |
 | Three hours after a bad deploy | **claimed, 0.85** — three hours either side of a deploy would compare times of day, so the control is the same three hours on the preceding days |
 | Signature on five different pages | **declined** — can't be pinned to any one page's code |
+| A bad build rolled back after 90 minutes | **claimed, 0.89** — the rollback commit descends from the old build, so it is not counted as carrying the change; by timestamps alone it would be, and the 19 quiet hours after it would dilute the finding to 0.72 |
+| The culprit five imports below the page | **claimed, 0.89** — the walk goes deeper than three hops while the reachable set still tells commits apart, and discounts the distance |
 | A commit that *fixed* the symptom | **declined** — 3% of sessions on builds carrying it hit this against 35% without, so the evidence against it outweighs everything pointing at it |
 | Site traffic collapses, checkout unchanged | **silent** — checkout failed at 10% last week and 10% today; only the homepage campaign stopped |
 
 Try them: `POST /api/dev/seed` with `{"scenario": "split" | "no-split" |
-"diffuse" | "fix-commit" | "traffic-shift" | "fresh-deploy" | "spa" |
-"safari" | "backend" | "priority" | "no-release"}`.
+"diffuse" | "fix-commit" | "traffic-shift" | "fresh-deploy" | "deep-import" |
+"rollback" | "spa" | "safari" | "backend" | "priority" | "no-release"}`.
 
 The last two are there because both failures are invisible from the outside.
 A scorer that treats evidence *against* a commit as merely absent evidence

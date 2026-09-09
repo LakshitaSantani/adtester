@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend" | "fix-commit" | "traffic-shift" | "fresh-deploy" | "deep-import";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend" | "fix-commit" | "traffic-shift" | "fresh-deploy" | "deep-import" | "rollback";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -230,6 +230,32 @@ export async function POST(request: Request) {
     await db.query(`DELETE FROM commits WHERE project_id = $1 AND sha = 'b7d2e10'`, [pid]);
     await make("b7d2e10", NEW_BUILD_AT, 20, 40, 14, "/checkout");
     await make("a3f91c2", NEW_BUILD_AT, 20, 40, 1, "/checkout");
+  } else if (scenario === "rollback") {
+    // A bad build served for ninety minutes, spotted, and rolled back.
+    //
+    // The rollback ships as a new commit on top of the old code, so it first
+    // appears AFTER the bad change and timestamps file it as carrying it.
+    // The nineteen quiet hours that follow then land in the "with the change"
+    // group and drown the ninety bad minutes: the separation falls from 70
+    // points to 7, and a certain cause is reported as a weak suspicion.
+    //
+    // The commit graph knows better — the rollback descends from the old
+    // build, not from the change — and that is what the parents column is
+    // for.
+    await db.query(
+      `INSERT INTO commits
+         (project_id, sha, authored_at, deployed_at, author, message, files_touched, parents)
+       VALUES ($1,$2,$3,$3,$4,$5,$6,$7)`,
+      [pid, "ba55aa0", at(19.5), "seed", "Revert to the previous build", [], ["b7d2e10"]],
+    );
+
+    // Most users stayed on the old build throughout — a partial rollout,
+    // which is why there is anything to compare against at all.
+    await make("b7d2e10", 21, 20, 120, 3, "/checkout");
+    // The bad build, live for ninety minutes.
+    await make("a3f91c2", 21, 1.5, 20, 18, "/checkout");
+    // The rollback, quiet, and mistaken for the change by the clock.
+    await make("ba55aa0", 19.5, 19.5, 120, 2, "/checkout");
   } else if (scenario === "deep-import") {
     // The bug lives in a shared validator five imports below the page, the
     // shape a layered backend has: handler -> controller -> domain service ->
@@ -355,6 +381,12 @@ export async function POST(request: Request) {
       "against 35% of those without. Every other signal still points at it, so a " +
       "scorer that clamps negative evidence to zero reaches 0.48 and names the " +
       "repair as the cause. It should decline instead.",
+    rollback:
+      "A bad build ran for ninety minutes and was rolled back. The rollback commit " +
+      "first appears after the change, so by timestamps it counts as carrying it, " +
+      "and nineteen quiet hours dilute the ninety bad minutes down to a 7-point " +
+      "separation. Read from the commit graph the rollback descends from the old " +
+      "build, the separation is ~70 points, and the confidence roughly 0.61 -> 0.89.",
     "deep-import":
       "The culprit is a shared validator five imports below /checkout. A fixed " +
       "three-hop walk never reached it and reported that nothing shipped touches " +

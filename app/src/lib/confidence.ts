@@ -139,7 +139,15 @@ function counterfactualSignal(cf: Counterfactual): Signal {
         `${withPct}% of ${cf.withChange.sessions} sessions on builds with the change hit ` +
         `this, against ${withoutPct}% of ${cf.withoutChange.sessions} on builds without it, ` +
         `over the ${cf.overlap.hours.toFixed(1)} hours both were serving traffic` +
-        worseOrNot,
+        worseOrNot +
+        (cf.buildsByAncestry === cf.buildsCompared
+          ? ` Which builds contain the change was read from the commit history.`
+          : cf.buildsByAncestry > 0
+            ? ` ${cf.buildsByAncestry} of ${cf.buildsCompared} builds were placed from the ` +
+              `commit history and the rest from when they first appeared.`
+            : ` No build names a commit, so which ones contain the change was judged ` +
+              `from when each first appeared — a cherry-pick or a rollback would ` +
+              `defeat that.`),
     };
   }
 
