@@ -21,6 +21,7 @@ type InvestigationRow = {
 
 const DECLINE_LABEL: Record<string, string> = {
   diffuse: "too widespread to pin down",
+  no_route: "this page's code wasn't found",
   no_candidates: "nothing shipped that touches this page",
   tied_candidates: "candidates couldn't be separated",
   low_confidence: "evidence too thin",

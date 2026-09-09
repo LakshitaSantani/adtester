@@ -17,6 +17,10 @@ type EvidenceRow = {
 const DECLINE_EXPLAIN: Record<string, string> = {
   diffuse:
     "The symptom appears on too many different pages to be traced to the code behind any one of them.",
+  no_route:
+    "The code behind this page was never found, so nothing could be ruled in or out. " +
+    "Usually the repository doesn't serve this URL, or its framework isn't one the " +
+    "indexer recognises yet.",
   no_candidates:
     "Nothing that shipped in the window touches code this page reaches.",
   tied_candidates:

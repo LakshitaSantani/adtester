@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { retrieveCandidates } from "@/lib/intent";
+import { resolveAnthropicKey } from "@/lib/secrets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,7 +55,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     commit: commit.message,
     files: commit.files_touched,
-    verifierEnabled: Boolean(process.env.ANTHROPIC_API_KEY),
+    verifierEnabled: Boolean(await resolveAnthropicKey(project.id)),
     stats,
     candidates: candidates.map((c) => ({
       score: c.score,

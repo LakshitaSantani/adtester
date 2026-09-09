@@ -21,6 +21,7 @@ import { getCommitDiff, type RepoRef } from "./github";
 import { findIntent, type IntentMatch } from "./intent";
 import { buildTimeline, formatTimeline } from "./session-timeline";
 import { newId } from "./ids";
+import { resolveAnthropicKey } from "./secrets";
 import { describeSymptom, isDiffuse, type Symptom } from "./symptoms";
 
 /**
@@ -33,7 +34,14 @@ const TIE_THRESHOLD = 0.1;
 /** Below this, nothing is worth asserting. */
 const MIN_CLAIM_CONFIDENCE = 0.35;
 
-export type DeclineReason = "diffuse" | "no_candidates" | "tied_candidates" | "low_confidence";
+export type DeclineReason =
+  | "diffuse"
+  /** The page's code was never found, so nothing could be ruled in or out. */
+  | "no_route"
+  /** The code WAS found, and nothing that shipped touches it. */
+  | "no_candidates"
+  | "tied_candidates"
+  | "low_confidence";
 
 export type Investigation = {
   id: string;
@@ -106,8 +114,14 @@ export async function investigate(
 
   const narrowed = await candidatesForSession(probeSessionId);
   if (!narrowed || narrowed.candidates.length === 0) {
+    // Two very different failures used to share one label. "Nothing shipped
+    // that touches this page" means there is nothing to do. "We couldn't
+    // find this page's code at all" means the setup is incomplete — an
+    // unrecognised framework, or the wrong repository — and is fixable.
+    const routeUnknown =
+      narrowed !== null && narrowed.matchedRoutes.length === 0 && narrowed.path !== null;
     return decline(
-      "no_candidates",
+      routeUnknown ? "no_route" : "no_candidates",
       narrowed?.note ??
         "Nothing that shipped recently touches code this page reaches, so no change here explains it.",
     );
@@ -180,6 +194,8 @@ export async function investigate(
   // looking for what the team said they were building. Running this over
   // every candidate would cost a model call each to explain changes we are
   // about to discard.
+  const apiKey = await resolveAnthropicKey(projectId);
+
   let intent: IntentMatch[] = [];
   try {
     intent = await findIntent(
@@ -191,6 +207,7 @@ export async function investigate(
         deployedAt: best.candidate.deployedAt,
       },
       description,
+      apiKey,
     );
   } catch (error) {
     // An enrichment must never take down a finding that stands on its own.
@@ -201,7 +218,7 @@ export async function investigate(
   // commit is responsible — only to explain one it was handed.
   let analysis: Analysis | null = null;
   try {
-    analysis = await runAnalyst(projectId, best.candidate, symptom, description, intent);
+    analysis = await runAnalyst(projectId, best.candidate, symptom, description, intent, apiKey);
   } catch (error) {
     console.log("investigate: analysis failed", error);
   }
@@ -240,6 +257,7 @@ async function runAnalyst(
   symptom: Symptom,
   description: string,
   intent: IntentMatch[],
+  apiKey: string | null,
 ): Promise<Analysis | null> {
   const db = await getDb();
 
@@ -277,6 +295,7 @@ async function runAnalyst(
   }
 
   return analyse({
+    apiKey,
     commit: {
       sha: candidate.sha,
       message: candidate.message,

@@ -405,3 +405,34 @@ table.signals td.neg { color: var(--warn); }
   text-transform: uppercase; color: var(--accent);
 }
 .analysis pre.snippet { margin-top: 14px; }
+
+/* ---------- setup ---------- */
+
+.setup-step {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  padding: 20px 22px;
+  margin-bottom: 12px;
+}
+.setup-step.done { border-left-color: var(--good); }
+
+.setup-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 14px; }
+.setup-n {
+  flex: none;
+  width: 24px; height: 24px; line-height: 23px; text-align: center;
+  border: 1px solid var(--line); border-radius: 50%;
+  font-family: var(--mono); font-size: 12px; color: var(--muted);
+}
+.setup-step.done .setup-n { border-color: var(--good); color: var(--good); }
+.setup-head h2 { font-size: 16px; }
+
+.setup-body { padding-left: 38px; }
+.setup-body p:first-child { margin-top: 0; }
+.setup-body details summary { cursor: pointer; color: var(--accent-ink); }
+.setup-body input[type="file"] { font-size: 13px; }
+
+.setup-actions {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 22px 0 8px;
+}

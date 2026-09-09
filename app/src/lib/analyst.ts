@@ -48,6 +48,8 @@ export type Analysis = {
 };
 
 type AnalystInput = {
+  /** Resolved per project, falling back to the server's own. */
+  apiKey: string | null;
   commit: { sha: string; message: string; files: string[] };
   diff: string | null;
   fileContents: Array<{ path: string; content: string }>;
@@ -55,10 +57,6 @@ type AnalystInput = {
   symptom: string;
   intent: IntentMatch[];
 };
-
-export function analystAvailable(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
-}
 
 /**
  * Fetch the source of the files a commit touched.
@@ -83,7 +81,7 @@ export async function fetchFileContents(
 }
 
 export async function analyse(input: AnalystInput): Promise<Analysis | null> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = input.apiKey;
   if (!apiKey) return null;
 
   const intentBlock =

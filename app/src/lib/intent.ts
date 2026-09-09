@@ -272,8 +272,8 @@ export async function verifyMatches(
   commitMessage: string,
   changedFiles: string[],
   symptom: string,
+  apiKey: string | null,
 ): Promise<IntentMatch[]> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || candidates.length === 0) return [];
 
   const numbered = candidates
@@ -384,6 +384,7 @@ export async function findIntent(
   projectId: string,
   commit: { sha: string; message: string; files: string[]; deployedAt: string | null },
   symptom: string,
+  apiKey: string | null,
 ): Promise<IntentMatch[]> {
   const { candidates, stats } = await retrieveCandidates(
     projectId,
@@ -405,5 +406,5 @@ export async function findIntent(
   );
 
   if (candidates.length === 0) return [];
-  return verifyMatches(candidates, commit.message, commit.files, symptom);
+  return verifyMatches(candidates, commit.message, commit.files, symptom, apiKey);
 }

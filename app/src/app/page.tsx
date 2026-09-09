@@ -25,7 +25,10 @@ export default function Home() {
         body: JSON.stringify({ name }),
       });
       if (!response.ok) throw new Error(`server returned ${response.status}`);
-      setProject((await response.json()) as Created);
+      const created = (await response.json()) as Created;
+      // Straight into setup — a project with nothing connected can't do
+      // anything, so stopping here to admire a key would be a dead end.
+      window.location.href = `/p/${created.viewToken}/setup`;
     } catch (e) {
       setError(
         e instanceof Error
