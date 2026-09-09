@@ -16,6 +16,7 @@ import { candidatesForSession, type Candidate } from "./candidates";
 import { score, type Scored } from "./confidence";
 import { testCounterfactual, type Counterfactual } from "./counterfactual";
 import { getDb } from "./db";
+import { findIntent, type IntentMatch } from "./intent";
 import { newId } from "./ids";
 import { describeSymptom, isDiffuse, type Symptom } from "./symptoms";
 
@@ -172,6 +173,27 @@ export async function investigate(
     };
   }
 
+  // Only now, on the one commit we're actually going to name, do we go
+  // looking for what the team said they were building. Running this over
+  // every candidate would cost a model call each to explain changes we are
+  // about to discard.
+  let intent: IntentMatch[] = [];
+  try {
+    intent = await findIntent(
+      projectId,
+      {
+        sha: best.candidate.sha,
+        message: best.candidate.message,
+        files: best.candidate.matchedFiles,
+        deployedAt: best.candidate.deployedAt,
+      },
+      description,
+    );
+  } catch (error) {
+    // An enrichment must never take down a finding that stands on its own.
+    console.log("investigate: intent lookup failed", error);
+  }
+
   const claim = buildClaim(best.candidate, symptom);
 
   await db.query(
@@ -182,7 +204,7 @@ export async function investigate(
     [id, claim, best.candidate.sha, best.scored.confidence],
   );
 
-  await saveEvidence(id, ranked, symptom);
+  await saveEvidence(id, ranked, symptom, intent);
 
   return {
     id,
@@ -219,6 +241,7 @@ async function saveEvidence(
   investigationId: string,
   ranked: Investigation["ranked"],
   symptom?: Symptom,
+  intent: IntentMatch[] = [],
 ): Promise<void> {
   const db = await getDb();
   await db.query(`DELETE FROM evidence WHERE investigation_id = $1`, [investigationId]);
@@ -236,6 +259,33 @@ async function saveEvidence(
         ],
       );
     }
+  }
+
+  // Intent rows carry a contribution of exactly zero, and that is the point.
+  // A PRD saying "must accept international format" next to code that doesn't
+  // is enormously persuasive to a human and proves nothing about why a metric
+  // moved. It explains; it must never score.
+  for (const match of intent) {
+    await db.query(
+      `INSERT INTO evidence (id, investigation_id, kind, ref, quote, detail, contribution)
+       VALUES ($1,$2,$3,$4,$5,$6,0)`,
+      [
+        newId("ev"),
+        investigationId,
+        match.source === "transcript" ? "transcript" : "prd",
+        match.chunkId,
+        match.quote,
+        JSON.stringify({
+          title: match.documentTitle,
+          url: match.documentUrl,
+          speaker: match.speaker,
+          occurredAt: match.occurredAt,
+          offsetMs: match.offsetMs,
+          kind: match.kind,
+          relevance: match.relevance,
+        }),
+      ],
+    );
   }
 
   for (const [rank, entry] of ranked.entries()) {

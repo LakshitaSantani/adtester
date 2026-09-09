@@ -250,3 +250,11 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS external_id TEXT;
 
 CREATE INDEX IF NOT EXISTS sessions_external
   ON sessions (project_id, source, external_id);
+
+-- Order of a chunk inside its document.
+--
+-- For a transcript this is turn order, and it is what lets a match pull in
+-- the turns around it. The decisive line in a meeting is usually the REPLY to
+-- the one that matched keywords -- somebody raises a concern using the words
+-- from the code, and the answer that overrules them shares none of them.
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0;

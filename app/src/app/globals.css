@@ -377,3 +377,15 @@ table.signals td.neg { color: var(--warn); }
 @media (max-width: 640px) {
   .ev-block { grid-template-columns: 1fr; gap: 8px; }
 }
+
+/* ---------- intent evidence ---------- */
+
+.ev-block.intent-block { border-left: 3px solid var(--guard); }
+.intent-quote {
+  margin: 0 0 8px;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--line);
+  font-size: 15px;
+  line-height: 1.5;
+  font-style: italic;
+}

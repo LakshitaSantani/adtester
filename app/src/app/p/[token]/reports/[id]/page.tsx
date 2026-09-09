@@ -68,6 +68,7 @@ export default async function ReportPage({
   );
 
   const sessions = evidence.filter((e) => e.kind === "session");
+  const intent = evidence.filter((e) => e.kind === "prd" || e.kind === "transcript");
   const commits = evidence
     .filter((e) => e.kind === "commit")
     .sort((a, b) => (b.contribution ?? 0) - (a.contribution ?? 0));
@@ -126,6 +127,42 @@ export default async function ReportPage({
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {intent.map((m) => {
+        const d = parse(m.detail);
+        const when = d.occurredAt ? String(d.occurredAt).slice(0, 10) : null;
+        return (
+          <div key={m.id} className="ev-block intent-block">
+            <div className="ev-kind">
+              {m.kind === "transcript" ? "Said in a meeting" : "Written in a PRD"}
+              <span className="ev-score mono muted">explains</span>
+            </div>
+            <div className="ev-body">
+              <blockquote className="intent-quote">{m.quote}</blockquote>
+              <div className="candidate-meta">
+                {d.speaker ? `${String(d.speaker)} · ` : ""}
+                {String(d.title ?? "")}
+                {when ? ` · ${when}` : ""}
+                {d.kind ? ` · ${String(d.kind)}` : ""}
+              </div>
+              {d.relevance ? (
+                <div className="small" style={{ marginTop: 6 }}>
+                  {String(d.relevance)}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+
+      {intent.length > 0 && (
+        <div className="note guard">
+          <b>This is context, not proof.</b> What the team meant to build does not move the
+          confidence number by a single point. It explains how the change came to be written
+          this way — which is usually what someone actually wants to know, and is exactly why
+          it must not be allowed to make the score look stronger.
         </div>
       )}
 
