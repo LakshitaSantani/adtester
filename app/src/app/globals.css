@@ -389,3 +389,19 @@ table.signals td.neg { color: var(--warn); }
   line-height: 1.5;
   font-style: italic;
 }
+
+/* ---------- analysis ---------- */
+
+.analysis {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 4px 20px 16px;
+  margin-bottom: 10px;
+}
+.analysis-row { padding: 14px 0 0; }
+.analysis-row p { margin: 4px 0 0; font-size: 15px; line-height: 1.55; }
+.analysis-label {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--accent);
+}
+.analysis pre.snippet { margin-top: 14px; }

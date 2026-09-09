@@ -12,11 +12,14 @@
  * audience one confidently wrong root cause ends the relationship.
  */
 
+import { analyse, fetchFileContents, type Analysis } from "./analyst";
 import { candidatesForSession, type Candidate } from "./candidates";
 import { score, type Scored } from "./confidence";
 import { testCounterfactual, type Counterfactual } from "./counterfactual";
 import { getDb } from "./db";
+import { getCommitDiff, type RepoRef } from "./github";
 import { findIntent, type IntentMatch } from "./intent";
+import { buildTimeline, formatTimeline } from "./session-timeline";
 import { newId } from "./ids";
 import { describeSymptom, isDiffuse, type Symptom } from "./symptoms";
 
@@ -194,6 +197,15 @@ export async function investigate(
     console.log("investigate: intent lookup failed", error);
   }
 
+  // The analyst runs last and knows the verdict. It is never asked which
+  // commit is responsible — only to explain one it was handed.
+  let analysis: Analysis | null = null;
+  try {
+    analysis = await runAnalyst(projectId, best.candidate, symptom, description, intent);
+  } catch (error) {
+    console.log("investigate: analysis failed", error);
+  }
+
   const claim = buildClaim(best.candidate, symptom);
 
   await db.query(
@@ -204,7 +216,7 @@ export async function investigate(
     [id, claim, best.candidate.sha, best.scored.confidence],
   );
 
-  await saveEvidence(id, ranked, symptom, intent);
+  await saveEvidence(id, ranked, symptom, intent, analysis);
 
   return {
     id,
@@ -216,6 +228,66 @@ export async function investigate(
     declinedReason: null,
     ranked,
   };
+}
+
+/**
+ * Gather what the analyst needs: the diff, the current source, and a
+ * description of what a real user actually did.
+ */
+async function runAnalyst(
+  projectId: string,
+  candidate: Candidate,
+  symptom: Symptom,
+  description: string,
+  intent: IntentMatch[],
+): Promise<Analysis | null> {
+  const db = await getDb();
+
+  const repoRow = await db.one<{
+    owner: string;
+    name: string;
+    default_branch: string;
+    access_token: string | null;
+  }>(
+    `SELECT owner, name, default_branch, access_token FROM repos
+      WHERE project_id = $1 ORDER BY created_at LIMIT 1`,
+    [projectId],
+  );
+
+  const repo: RepoRef | null = repoRow
+    ? { owner: repoRow.owner, name: repoRow.name, token: repoRow.access_token }
+    : null;
+
+  const [diff, fileContents] = repo
+    ? await Promise.all([
+        getCommitDiff(repo, candidate.sha),
+        fetchFileContents(repo, repoRow!.default_branch, candidate.matchedFiles),
+      ])
+    : [null, []];
+
+  // One affected recording, read back as what the person did.
+  let timeline = "No recording available.";
+  const probe = symptom.sessionIds[0];
+  if (probe) {
+    try {
+      timeline = formatTimeline(await buildTimeline(probe)) || timeline;
+    } catch {
+      // A missing event file costs the timeline, not the analysis.
+    }
+  }
+
+  return analyse({
+    commit: {
+      sha: candidate.sha,
+      message: candidate.message,
+      files: candidate.matchedFiles,
+    },
+    diff,
+    fileContents,
+    timeline,
+    symptom: description,
+    intent,
+  });
 }
 
 function weakestLink(scored: Scored): string {
@@ -242,6 +314,7 @@ async function saveEvidence(
   ranked: Investigation["ranked"],
   symptom?: Symptom,
   intent: IntentMatch[] = [],
+  analysis: Analysis | null = null,
 ): Promise<void> {
   const db = await getDb();
   await db.query(`DELETE FROM evidence WHERE investigation_id = $1`, [investigationId]);
@@ -284,6 +357,23 @@ async function saveEvidence(
           kind: match.kind,
           relevance: match.relevance,
         }),
+      ],
+    );
+  }
+
+  if (analysis) {
+    // Stored with contribution zero, like intent. The analyst explains a
+    // verdict it played no part in reaching, and must not appear to have
+    // strengthened it.
+    await db.query(
+      `INSERT INTO evidence (id, investigation_id, kind, ref, quote, detail, contribution)
+       VALUES ($1,$2,'analysis',$3,$4,$5,0)`,
+      [
+        newId("ev"),
+        investigationId,
+        ranked[0]?.candidate.sha ?? null,
+        analysis.howItBroke,
+        JSON.stringify(analysis),
       ],
     );
   }

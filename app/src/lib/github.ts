@@ -189,6 +189,35 @@ export async function getTree(repo: RepoRef, ref: string): Promise<TreeFile[]> {
     .map((n) => ({ path: n.path, size: n.size ?? 0 }));
 }
 
+/**
+ * The patch for one commit, as a unified diff.
+ *
+ * Capped per file: a lockfile or a generated bundle can run to tens of
+ * thousands of lines and would crowd out the change that actually matters.
+ */
+export async function getCommitDiff(
+  repo: RepoRef,
+  sha: string,
+  { maxCharsPerFile = 6000 } = {},
+): Promise<string | null> {
+  try {
+    const data = await gh<{
+      files?: Array<{ filename: string; patch?: string; status: string }>;
+    }>(repo, `/repos/${repo.owner}/${repo.name}/commits/${sha}`);
+
+    const parts = (data.files ?? [])
+      .filter((f) => f.patch)
+      .map(
+        (f) =>
+          `--- ${f.filename} (${f.status}) ---\n${f.patch!.slice(0, maxCharsPerFile)}`,
+      );
+
+    return parts.length > 0 ? parts.join("\n\n") : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Raw file contents. Returns null rather than throwing for missing files. */
 export async function getFile(
   repo: RepoRef,

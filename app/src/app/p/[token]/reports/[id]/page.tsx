@@ -69,6 +69,9 @@ export default async function ReportPage({
 
   const sessions = evidence.filter((e) => e.kind === "session");
   const intent = evidence.filter((e) => e.kind === "prd" || e.kind === "transcript");
+  const analysis = evidence.find((e) => e.kind === "analysis");
+  const a = analysis ? parse(analysis.detail) : null;
+  const fix = (a?.fix ?? null) as Record<string, unknown> | null;
   const commits = evidence
     .filter((e) => e.kind === "commit")
     .sort((a, b) => (b.contribution ?? 0) - (a.contribution ?? 0));
@@ -110,6 +113,45 @@ export default async function ReportPage({
           </div>
         )}
       </div>
+
+      {a && (
+        <>
+          <h2>What happened</h2>
+          <div className="analysis">
+            <div className="analysis-row">
+              <span className="analysis-label">The change</span>
+              <p>{String(a.whatChanged ?? "")}</p>
+            </div>
+            <div className="analysis-row">
+              <span className="analysis-label">How it broke</span>
+              <p>{String(a.howItBroke ?? "")}</p>
+            </div>
+            <div className="analysis-row">
+              <span className="analysis-label">What users hit</span>
+              <p>{String(a.whatUsersHit ?? "")}</p>
+            </div>
+          </div>
+        </>
+      )}
+
+      {fix && (
+        <>
+          <h2>Suggested fix</h2>
+          <div className="analysis">
+            <div className="analysis-row">
+              <span className="analysis-label">{String(fix.path ?? "")}</span>
+              <p>{String(fix.rationale ?? "")}</p>
+            </div>
+            {fix.patch ? (
+              <pre className="snippet">{String(fix.patch)}</pre>
+            ) : (
+              <div className="note guard" style={{ margin: "10px 0 0" }}>
+                <b>No patch offered.</b> {String(fix.caveat ?? "This needs a human decision.")}
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       <h2>The evidence</h2>
 
