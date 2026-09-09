@@ -22,6 +22,7 @@ import { getDb } from "./db";
 import * as gh from "./github";
 import { importFromPostHog } from "./import-posthog";
 import { investigate } from "./investigate";
+import { mineAliases } from "./aliases";
 import { RESEARCH_WINDOW_DAYS, researchCompetitor, saveEvents } from "./market";
 import { loadProfile } from "./profile";
 import { resolveAnthropicKey } from "./secrets";
@@ -470,6 +471,38 @@ async function walk(dir: string, acc: string[] = []): Promise<string[]> {
 
 // --- loop ------------------------------------------------------------------
 
+/**
+ * Learn what this team calls things, once per sync.
+ *
+ * Runs after the lexicon is built and the documents are in, because it needs
+ * both sides of the mapping. Costs one model call and buys every later
+ * investigation a search that knows the team's own vocabulary.
+ */
+async function mineProjectAliases(job: Job): Promise<void> {
+  const apiKey = await resolveAnthropicKey(job.project_id);
+  if (!apiKey) {
+    console.log("mine_aliases: needs an Anthropic key to read the documents");
+    return;
+  }
+
+  const result = await mineAliases(job.project_id, apiKey);
+
+  if (result.proposed === 0) {
+    console.log("mine_aliases: no names proposed");
+    return;
+  }
+
+  console.log(
+    `mine_aliases: ${result.accepted.length} of ${result.proposed} names kept` +
+      (result.accepted.length > 0
+        ? ` (${result.accepted.map((a) => `"${a.alias}" -> ${a.path}`).join(", ")})`
+        : ""),
+  );
+  for (const { alias, reason } of result.rejected) {
+    console.log(`mine_aliases: dropped "${alias}" — ${reason}`);
+  }
+}
+
 const HANDLERS: Record<string, (job: Job) => Promise<void>> = {
   sync_repo: syncRepo,
   index_repo: indexRepo,
@@ -477,6 +510,7 @@ const HANDLERS: Record<string, (job: Job) => Promise<void>> = {
   investigate: runInvestigations,
   import_posthog: importPostHog,
   research_market: researchMarket,
+  mine_aliases: mineProjectAliases,
 };
 
 // Same reasoning as the database singleton: a hot reload must not start a

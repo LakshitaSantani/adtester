@@ -89,6 +89,7 @@ export async function POST(request: Request) {
 
   await enqueue(project.id, "sync_repo", { sinceDays: 30 });
   await enqueue(project.id, "index_repo");
+  await enqueue(project.id, "mine_aliases");
   await enqueue(project.id, "investigate");
   ensureWorker();
 

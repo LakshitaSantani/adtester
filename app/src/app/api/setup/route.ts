@@ -164,6 +164,12 @@ export async function POST(request: Request) {
       await enqueue(project.id, "sync_repo", { sinceDays: 30 });
       await enqueue(project.id, "index_repo");
     }
+    // Alias mining needs both halves of the mapping — the lexicon and the
+    // documents — so it queues after the repository work and before anything
+    // that searches. Every investigation after this one can find a passage
+    // that calls the checkout service by the name only this team uses.
+    await enqueue(project.id, "mine_aliases");
+
     // Market research runs before the investigation so a finding can be
     // published with its context already attached rather than appearing bare
     // and gaining it minutes later.
