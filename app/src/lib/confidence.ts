@@ -80,6 +80,8 @@ export type ScoreInput = {
   counterfactual: Counterfactual;
   /** Changed files that the page's code actually reaches. */
   matchedFiles: number;
+  /** Import hops from the page to the nearest of them. */
+  nearestHop: number;
   /** Everything the commit touched. */
   filesTouched: number;
   /** Hours between the deploy and the symptom starting. */
@@ -170,16 +172,35 @@ function counterfactualSignal(cf: Counterfactual): Signal {
   };
 }
 
+/**
+ * How much a match counts, given how far the file sits from the page.
+ *
+ * Flat across the hops the walk always takes: page -> component -> helper is
+ * ordinary structure, not distance worth penalising, and discounting it
+ * would weaken findings that were never in doubt. Past that the walk is in
+ * territory a fixed three-hop cutoff never reached, and a file that far out
+ * is usually shared with much of the repository — so "this page reaches it"
+ * stops being much of an argument that a change there broke this page.
+ *
+ * Reaching further and weighing what is found are one change, not two:
+ * without the discount, deepening the walk would just add confident noise.
+ */
+function proximity(hop: number): number {
+  return hop <= 3 ? 1 : 1 / (1 + (hop - 3) * 0.35);
+}
+
 function codePathSignal(
   matched: number,
   total: number,
   reachedVia: "route" | "api" | "both",
   symptomIsRequestFailure: boolean,
+  nearestHop: number,
 ): Signal {
   // Touching one of two files is a sharper signal than one of two hundred:
   // a sprawling commit intersects the page's code by coincidence.
   const specificity = total > 0 ? matched / total : 0;
   let score = matched === 0 ? 0 : Math.max(0.3, Math.min(1, specificity));
+  score *= proximity(nearestHop);
 
   // A failed request was answered by the server. A change reached only through
   // the page's imports cannot have produced that response, so it is a weaker
@@ -204,7 +225,9 @@ function codePathSignal(
     detail:
       matched === 0
         ? "Touches nothing this page reaches."
-        : `${matched} of ${total} changed files are ${where}.` +
+        : `${matched} of ${total} changed files are ${where}` +
+          (nearestHop > 3 ? `, the nearest ${nearestHop} imports away` : "") +
+          `.` +
           (wrongSideOfTheWire
             ? " The failure was a rejected request, which the server answered, so client-side code is a weaker explanation."
             : ""),
@@ -311,6 +334,7 @@ export function score(input: ScoreInput): Scored {
       input.filesTouched,
       input.reachedVia,
       input.symptomIsRequestFailure,
+      input.nearestHop,
     ),
     onsetSignal(input.onsetGapHours),
     volumeSignal(input.affectedSessions),

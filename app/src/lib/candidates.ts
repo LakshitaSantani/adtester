@@ -37,12 +37,51 @@ const DEFAULT_WINDOW_DAYS = 7;
 const UNDATED_WINDOW_DAYS = 30;
 
 /**
- * How many import hops out from the route file we consider "reachable".
+ * Hops that are always walked, whatever the graph looks like.
+ *
  * Three covers page -> feature component -> shared helper, which is where
- * most real bugs live. Deeper and nearly every file in the repo becomes
- * reachable, which defeats the point of filtering.
+ * most real bugs live. It is a floor rather than a limit: walking fewer
+ * would make the filter miss things it used to catch.
  */
-const MAX_IMPORT_DEPTH = 3;
+const MIN_IMPORT_DEPTH = 3;
+
+/**
+ * Where the walk stops even if the graph is still selective.
+ *
+ * Only a termination guard for pathological graphs — the selectivity rule
+ * below almost always stops first.
+ */
+const MAX_IMPORT_DEPTH = 8;
+
+/**
+ * The largest share of the repository the reachable set may grow to.
+ *
+ * The set exists to tell commits apart. A set holding most of the repository
+ * tells them apart from nothing, so growing past this buys reach at the cost
+ * of the only thing reach was for.
+ *
+ * This replaced a hard three-hop cutoff, which failed in both directions
+ * depending on the repository it met. In a layered backend — handler ->
+ * controller -> domain service -> client -> shared validator — the bug lives
+ * five hops out and a three-hop walk pruned the culprit, reporting that
+ * nothing shipped touched this page. In a densely shared frontend, three hops
+ * already reach most of the tree and the filter was doing nothing. One
+ * constant cannot be right for both, because the question is about the shape
+ * of the graph rather than about a number of hops.
+ */
+const SELECTIVITY_LIMIT = 0.35;
+
+/**
+ * The reachable set is always allowed to grow to at least this many files.
+ *
+ * A share of the repository is the right measure of "too big to discriminate"
+ * and a nonsense one when the repository is small: a share of forty indexed
+ * files is a budget of fourteen, which stops the walk after a couple of hops
+ * for no reason connected to selectivity. Nothing is diluted by reaching most
+ * of a small codebase — there was never much to tell apart — so below this
+ * size the rule simply does not apply.
+ */
+const MIN_REACHABLE_BUDGET = 40;
 
 export type Candidate = {
   sha: string;
@@ -54,6 +93,13 @@ export type Candidate = {
   prTitle: string | null;
   /** The reachable files this commit touched — the reason it's a suspect. */
   matchedFiles: string[];
+  /**
+   * Import hops from the page to the nearest file this commit touched.
+   *
+   * 0 is the route file itself. Distance is not a filter — it is weighed,
+   * so a deep match still counts, just for less than a direct one.
+   */
+  nearestHop: number;
   filesTouchedCount: number;
   /**
    * Which evidence chain connects this change to the symptom.
@@ -73,7 +119,7 @@ export type CandidateResult = {
   matchedRoutes: string[];
   /** Endpoints the session called that failed, and we could place in the repo. */
   matchedApiRoutes: string[];
-  /** Files reachable from those routes, within MAX_IMPORT_DEPTH. */
+  /** Files reachable from those routes, as far as the walk stayed useful. */
   reachableFiles: string[];
   /** Everything deployed in the window, before code-path filtering. */
   deployedInWindow: number;
@@ -94,19 +140,28 @@ function pathOf(url: string | null): string | null {
 /**
  * Walk the import graph outward from a set of entry files.
  *
- * Breadth-first with a depth cap and a visited set, so a cyclic import graph
- * (which every real codebase has) terminates.
+ * Breadth-first with a visited set, so a cyclic import graph (which every
+ * real codebase has) terminates. Returns how many hops each file sits from
+ * an entry, because distance is evidence: a helper the page imports directly
+ * is a far better explanation for the page breaking than a validator forty
+ * other modules also use.
+ *
+ * The walk goes as deep as it can while the set still discriminates, rather
+ * than to a fixed number of hops. A whole layer is taken or left — never
+ * part of one, which would mean including files for no better reason than
+ * the order the database returned them.
  */
 async function reachableFrom(
   projectId: string,
   entries: string[],
-  maxDepth = MAX_IMPORT_DEPTH,
-): Promise<string[]> {
+  fileBudget: number,
+): Promise<Map<string, number>> {
   const db = await getDb();
-  const seen = new Set<string>(entries);
+  const depths = new Map<string, number>();
+  for (const entry of entries) depths.set(entry, 0);
   let frontier = entries;
 
-  for (let depth = 0; depth < maxDepth && frontier.length > 0; depth++) {
+  for (let hop = 1; hop <= MAX_IMPORT_DEPTH && frontier.length > 0; hop++) {
     const rows = await db.query<{ to_path: string }>(
       `SELECT DISTINCT to_path FROM code_edges
         WHERE project_id = $1 AND from_path = ANY($2::text[])`,
@@ -115,14 +170,20 @@ async function reachableFrom(
 
     const next: string[] = [];
     for (const row of rows) {
-      if (seen.has(row.to_path)) continue;
-      seen.add(row.to_path);
+      if (depths.has(row.to_path)) continue;
       next.push(row.to_path);
     }
+    if (next.length === 0) break;
+
+    // The first few hops are taken whatever they cost. Past those, a layer
+    // that would swell the set beyond discriminating is where the walk ends.
+    if (hop > MIN_IMPORT_DEPTH && depths.size + next.length > fileBudget) break;
+
+    for (const p of next) depths.set(p, hop);
     frontier = next;
   }
 
-  return Array.from(seen);
+  return depths;
 }
 
 export async function candidatesForSession(
@@ -252,21 +313,37 @@ export async function candidatesForSession(
 
   // Kept apart rather than merged, because which chain reached a file is
   // itself evidence about what could have caused what.
+  // How large the reachable set may grow before it stops telling commits
+  // apart, measured against this repository rather than assumed.
+  const [{ n: indexedFiles }] = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM code_entities WHERE project_id = $1`,
+    [session.project_id],
+  );
+  const fileBudget = Math.max(
+    MIN_REACHABLE_BUDGET,
+    Math.floor(indexedFiles * SELECTIVITY_LIMIT),
+  );
+
   const [fromRoutes, fromApis] = await Promise.all([
     matched.length > 0
-      ? reachableFrom(session.project_id, matched.map((r) => r.path))
-      : Promise.resolve([]),
+      ? reachableFrom(session.project_id, matched.map((r) => r.path), fileBudget)
+      : Promise.resolve(new Map<string, number>()),
     matchedApis.length > 0
-      ? reachableFrom(session.project_id, matchedApis.map((r) => r.path))
-      : Promise.resolve([]),
+      ? reachableFrom(session.project_id, matchedApis.map((r) => r.path), fileBudget)
+      : Promise.resolve(new Map<string, number>()),
   ]);
 
-  const routeSet = new Set(fromRoutes);
-  const apiSet = new Set(fromApis);
-  const reachable = [...new Set([...fromRoutes, ...fromApis])];
-  base.reachableFiles = reachable;
+  const routeSet = new Set(fromRoutes.keys());
+  const apiSet = new Set(fromApis.keys());
 
-  const reachableSet = new Set(reachable);
+  // A file both chains reach sits at whichever distance is shorter.
+  const hops = new Map<string, number>(fromRoutes);
+  for (const [file, hop] of fromApis) {
+    hops.set(file, Math.min(hop, hops.get(file) ?? Infinity));
+  }
+
+  base.reachableFiles = [...hops.keys()];
+  const reachableSet = new Set(hops.keys());
 
   base.candidates = inWindow
     .map((c) => {
@@ -283,6 +360,7 @@ export async function candidatesForSession(
         prNumber: c.pr_number,
         prTitle: c.pr_title,
         matchedFiles,
+        nearestHop: Math.min(...matchedFiles.map((f) => hops.get(f) ?? MAX_IMPORT_DEPTH)),
         filesTouchedCount: (c.files_touched ?? []).length,
       };
     })

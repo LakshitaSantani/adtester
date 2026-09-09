@@ -195,6 +195,7 @@ export async function investigate(
     const scored = score({
       counterfactual,
       matchedFiles: candidate.matchedFiles.length,
+      nearestHop: candidate.nearestHop,
       filesTouched: candidate.filesTouchedCount,
       onsetGapHours,
       affectedSessions: symptom.affectedSessions,

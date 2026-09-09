@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend" | "fix-commit" | "traffic-shift" | "fresh-deploy";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend" | "fix-commit" | "traffic-shift" | "fresh-deploy" | "deep-import";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -230,6 +230,48 @@ export async function POST(request: Request) {
     await db.query(`DELETE FROM commits WHERE project_id = $1 AND sha = 'b7d2e10'`, [pid]);
     await make("b7d2e10", NEW_BUILD_AT, 20, 40, 14, "/checkout");
     await make("a3f91c2", NEW_BUILD_AT, 20, 40, 1, "/checkout");
+  } else if (scenario === "deep-import") {
+    // The bug lives in a shared validator five imports below the page, the
+    // shape a layered backend has: handler -> controller -> domain service ->
+    // client -> validator. A fixed three-hop walk stopped two files short and
+    // reported that nothing shipped touches this page, which reads as an
+    // exoneration of code nobody looked at.
+    const chain: Array<[string, string]> = [
+      ["src/checkout/validation.ts", "src/domain/order-service.ts"],
+      ["src/domain/order-service.ts", "src/domain/billing-client.ts"],
+      ["src/domain/billing-client.ts", "src/shared/field-rules.ts"],
+    ];
+    for (const [from, to] of chain) {
+      const name = to.split("/").pop()!.replace(/\.\w+$/, "");
+      await db.query(
+        `INSERT INTO code_entities (id, project_id, path, kind, name, route, aliases)
+         VALUES ($1,$2,$3,'module',$4,NULL,$5)`,
+        [newId("ce"), pid, to, name, [name.toLowerCase()]],
+      );
+      await db.query(
+        `INSERT INTO code_edges (project_id, from_path, to_path) VALUES ($1,$2,$3)
+         ON CONFLICT DO NOTHING`,
+        [pid, from, to],
+      );
+    }
+
+    // Only this commit is a plausible cause, and only if the walk gets there.
+    // page(0) -> CheckoutForm(1) -> validation(2) -> order-service(3) ->
+    // billing-client(4) -> field-rules(5).
+    await db.query(
+      `DELETE FROM commits WHERE project_id = $1 AND sha IN ('a3f91c2','b7d2e10')`,
+      [pid],
+    );
+    await db.query(
+      `INSERT INTO commits
+         (project_id, sha, authored_at, deployed_at, author, message, files_touched)
+       VALUES ($1,$2,$3,$3,$4,$5,$6)`,
+      [pid, "9de44c1", at(NEW_BUILD_AT), "seed", "Tighten shared field rules",
+       ["src/shared/field-rules.ts"]],
+    );
+
+    await make("9de44c1", NEW_BUILD_AT, 20, 40, 22, "/checkout");
+    await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout");
   } else if (scenario === "fresh-deploy") {
     // Three hours after a bad deploy, which is when anyone actually wants an
     // answer. There are no build stamps, so the comparison has to be over
@@ -313,6 +355,11 @@ export async function POST(request: Request) {
       "against 35% of those without. Every other signal still points at it, so a " +
       "scorer that clamps negative evidence to zero reaches 0.48 and names the " +
       "repair as the cause. It should decline instead.",
+    "deep-import":
+      "The culprit is a shared validator five imports below /checkout. A fixed " +
+      "three-hop walk never reached it and reported that nothing shipped touches " +
+      "this page — a false all-clear. It should now name 9de44c1, at a confidence " +
+      "discounted for the distance rather than at full marks.",
     "fresh-deploy":
       "a3f91c2 deployed three hours ago and 45% of sessions since have hit this, " +
       "against 8% in the same three hours on each of the previous seven days. " +
