@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -45,6 +45,10 @@ export async function POST(request: Request) {
   // which imports validation — so validation sits two hops from the page, and
   // a change to it is a legitimate suspect for a problem seen on /checkout.
   const files: Array<[string, string, string | null]> = [
+    // A Python service behind the page. Nothing in the frontend import graph
+    // reaches it — the only connection is the request the browser makes.
+    ["services/api/checkout.py", "api", "/api/checkout/validate"],
+    ["services/lib/phone_rules.py", "module", null],
     ["app/checkout/page.tsx", "route", "/checkout"],
     ["app/account/page.tsx", "route", "/account"],
     ["src/checkout/CheckoutForm.tsx", "component", null],
@@ -64,6 +68,7 @@ export async function POST(request: Request) {
   }
 
   const edges: Array<[string, string]> = [
+    ["services/api/checkout.py", "services/lib/phone_rules.py"],
     ["app/checkout/page.tsx", "src/checkout/CheckoutForm.tsx"],
     ["src/checkout/CheckoutForm.tsx", "src/checkout/validation.ts"],
     ["src/checkout/CheckoutForm.tsx", "src/checkout/PhoneInput.tsx"],
@@ -97,6 +102,7 @@ export async function POST(request: Request) {
     ["d4b8e29", NEW_BUILD_AT, "Bump analytics sampling", ["src/analytics/tracker.ts"]],
     ["e9c3a71", NEW_BUILD_AT, "Update the README", ["README.md"]],
     ["b7d2e10", OLD_BUILD_AT, "Restyle the checkout form", ["src/checkout/CheckoutForm.tsx"]],
+    ["f5e21a9", NEW_BUILD_AT, "Stricter phone rules in the API", ["services/lib/phone_rules.py"]],
   ];
 
   for (const [sha, hoursAgo, message, touched] of commits) {
@@ -146,14 +152,17 @@ export async function POST(request: Request) {
      * so this is the normal case rather than an edge one.
      */
     entryPath?: string,
+    /** For failures that are a rejected request rather than a client error. */
+    backend?: { signature: string; apiPath: string },
   ) => {
     for (let i = 0; i < count; i++) {
       const offset = (i / Math.max(1, count)) * spreadHours;
       await db.query(
         `INSERT INTO sessions
            (id, project_id, release, started_at, last_event_at, entry_url,
-            user_agent, event_count, signatures, error_count, signature_paths, paths)
-         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,0,$9::jsonb,$10::text[])`,
+            user_agent, event_count, signatures, error_count, signature_paths,
+            paths, api_paths)
+         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,0,$9::jsonb,$10::text[],$11::text[])`,
         [
           newSessionId(),
           pid,
@@ -162,12 +171,16 @@ export async function POST(request: Request) {
           `https://shop.example.com${entryPath ?? path}`,
           browserFor(i, affected, scenario),
           120 + i,
-          i < affected ? ["field_retry"] : [],
+          i < affected ? [backend?.signature ?? "field_retry"] : [],
           // Where the signature actually fired, which is the point.
-          i < affected ? JSON.stringify({ field_retry: [path] }) : "{}",
+          i < affected
+            ? JSON.stringify({ [backend?.signature ?? "field_retry"]: [path] })
+            : "{}",
           // Everyone visited the page, whether or not it broke for them —
           // that is the denominator the rate is measured against.
           entryPath && entryPath !== path ? [entryPath, path] : [path],
+          // Only the affected sessions saw the request fail.
+          backend && i < affected ? [backend.apiPath] : [],
         ],
       );
     }
@@ -193,6 +206,17 @@ export async function POST(request: Request) {
     // Same volume as the normal case, but the failures cluster on one browser.
     await make("a3f91c2", NEW_BUILD_AT, 20, 40, 22, "/checkout");
     await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout");
+  } else if (scenario === "backend") {
+    // The failure is a rejected request, and nothing in the frontend changed.
+    // Before backend indexing this reported "nothing touched this page".
+    await make("a3f91c2", NEW_BUILD_AT, 20, 40, 22, "/checkout", undefined, {
+      signature: "network_error",
+      apiPath: "/api/checkout/validate",
+    });
+    await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout", undefined, {
+      signature: "network_error",
+      apiPath: "/api/checkout/validate",
+    });
   } else if (scenario === "priority") {
     // A small problem where money changes hands, and a bigger one that costs
     // nothing. Ranked by volume alone the help page wins, which is exactly the
@@ -232,6 +256,10 @@ export async function POST(request: Request) {
       "The failures land almost entirely on Safari while Safari stays a minority " +
       "of traffic. Without cohort analysis this is indistinguishable from a " +
       "universal bug; it should now say so in the symptom itself.",
+    backend:
+      "The failure is a rejected request to /api/checkout/validate and nothing in " +
+      "the frontend changed. Before backend indexing this reported 'nothing " +
+      "touched this page'; it should now name f5e21a9, a Python commit.",
     priority:
       "8 people stuck in checkout against 34 annoyed by the help page. Without a " +
       "profile the help page ranks first; with /checkout marked critical it should " +

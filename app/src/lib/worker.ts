@@ -28,7 +28,11 @@ import { resolveAnthropicKey } from "./secrets";
 import type { PostHogConfig } from "./posthog";
 import { claimNext, fail, finish, type Job } from "./jobs";
 import {
+  apiRoutesInSource,
   classify,
+  isBackendFile,
+  parseBackendImports,
+  resolveBackendImport,
   isBarrel,
   parseBarrel,
   resolveThroughBarrels,
@@ -181,12 +185,26 @@ async function indexRepo(job: Job): Promise<void> {
     }
 
     let throughBarrels = 0;
+    // Routes a framework registers in code rather than by file location.
+    // Collected while reading, then folded into the entity list below.
+    const runtimeRoutes = new Map<string, string[]>();
 
     for (const rel of indexable) {
       const abs = path.join(root, rel);
       try {
         if ((await stat(abs)).size > MAX_FILE_BYTES) continue;
         const source = await readFile(abs, "utf8");
+
+        if (isBackendFile(rel)) {
+          const declared = apiRoutesInSource(source);
+          if (declared.length > 0) runtimeRoutes.set(rel, declared);
+
+          for (const specifier of parseBackendImports(source)) {
+            const target = resolveBackendImport(rel, specifier, known);
+            if (target && target !== rel) edges.push([rel, target]);
+          }
+        }
+
         for (const ref of parseImports(source)) {
           const targets = resolveThroughBarrels(rel, ref, known, barrels, packageRoots);
           for (const target of targets) {
@@ -202,11 +220,35 @@ async function indexRepo(job: Job): Promise<void> {
       }
     }
 
+    // A file that registers routes in code becomes an api entity, which the
+    // path-based rules could not have known.
+    for (const [path, routes] of runtimeRoutes) {
+      const existing = entities.find((e) => e.path === path);
+      const primary = routes[0];
+      if (existing && existing.kind !== "api") {
+        existing.kind = "api";
+        existing.route = primary;
+        existing.aliases = [...new Set([...existing.aliases, ...routes])];
+      }
+      // A single file often serves several routes; each needs its own entity
+      // so a URL can match the one it belongs to.
+      for (const route of routes.slice(1)) {
+        entities.push({
+          path,
+          kind: "api",
+          name: route.split("/").filter(Boolean).join(" "),
+          route,
+          aliases: [route],
+        });
+      }
+    }
+
     await saveLexicon(job.project_id, entities, edges);
 
-    const routes = entities.filter((e) => e.route !== null).length;
+    const routes = entities.filter((e) => e.kind === "route").length;
+    const apis = entities.filter((e) => e.kind === "api").length;
     console.log(
-      `index_repo: ${entities.length} files, ${routes} routes, ${edges.length} imports` +
+      `index_repo: ${entities.length} files, ${routes} routes, ${apis} api routes, ${edges.length} imports` +
         (barrels.size > 0 ? `, ${barrels.size} barrels (${throughBarrels} imports routed past)` : "") +
         (packageRoots.length > 1 ? `, ${packageRoots.length} packages` : ""),
     );

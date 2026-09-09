@@ -85,6 +85,10 @@ export async function POST(request: Request) {
   // a rate — "12 of 40 people on /checkout hit this" needs to know about the
   // 28 who didn't, and they leave no signature behind.
   const visited = new Set<string>();
+  // Paths of requests that failed. This is the only thread from a session back
+  // to server-side code: a frontend page reaches its own files by import, but
+  // a backend handler is only ever reached over the network.
+  const apiPaths = new Set<string>();
   let errors = 0;
 
   for (const event of batch.events as RrwebEvent[]) {
@@ -109,6 +113,19 @@ export async function POST(request: Request) {
 
     found.add(signature);
     if (signature === "js_error") errors += 1;
+
+    // A failed request names the endpoint behind it. Successful ones are not
+    // recorded, which is the right subset here — a backend change that made
+    // responses slower or subtly wrong leaves no trace this way, and that
+    // limitation is real.
+    if (signature === "network_error" && typeof payload?.url === "string") {
+      try {
+        const u = new URL(payload.url, "http://x");
+        if (u.pathname && u.pathname !== "/") apiPaths.add(u.pathname);
+      } catch {
+        /* an unparseable URL costs one endpoint, not the batch */
+      }
+    }
 
     const path = typeof payload?.path === "string" ? payload.path : null;
     if (path) {
@@ -137,6 +154,7 @@ export async function POST(request: Request) {
         error_count   = error_count + $4,
         signatures    = ARRAY(SELECT DISTINCT unnest(signatures || $5::text[])),
         paths         = ARRAY(SELECT DISTINCT unnest(paths || $9::text[])),
+        api_paths     = ARRAY(SELECT DISTINCT unnest(api_paths || $10::text[])),
         -- Merge rather than replace: a later batch can add a page an earlier
         -- one didn't see, and losing that would undo the whole point.
         signature_paths = (
@@ -164,6 +182,7 @@ export async function POST(request: Request) {
       batch.closed ? (batch.closeReason ?? "closed") : null,
       JSON.stringify(paths),
       Array.from(visited),
+      Array.from(apiPaths),
     ],
   );
 

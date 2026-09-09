@@ -128,7 +128,10 @@ export async function investigate(
     // find this page's code at all" means the setup is incomplete — an
     // unrecognised framework, or the wrong repository — and is fixable.
     const routeUnknown =
-      narrowed !== null && narrowed.matchedRoutes.length === 0 && narrowed.path !== null;
+      narrowed !== null &&
+      narrowed.matchedRoutes.length === 0 &&
+      narrowed.matchedApiRoutes.length === 0 &&
+      narrowed.path !== null;
     return decline(
       routeUnknown ? "no_route" : "no_candidates",
       narrowed?.note ??
@@ -161,6 +164,8 @@ export async function investigate(
       onsetGapHours,
       affectedSessions: symptom.affectedSessions,
       candidateCount: narrowed.candidates.length,
+      reachedVia: candidate.reachedVia,
+      symptomIsRequestFailure: symptom.signature === "network_error",
     });
 
     ranked.push({ candidate, scored, counterfactual });

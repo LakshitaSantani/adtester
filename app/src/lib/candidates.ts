@@ -37,6 +37,15 @@ export type Candidate = {
   /** The reachable files this commit touched — the reason it's a suspect. */
   matchedFiles: string[];
   filesTouchedCount: number;
+  /**
+   * Which evidence chain connects this change to the symptom.
+   *
+   * "api" means it was reached from an endpoint the session called and got an
+   * error from; "route" means it was reached through the page's imports. For a
+   * failed request those are not equally good explanations — the response came
+   * from the server, and a client-side file cannot make a server return 500.
+   */
+  reachedVia: "route" | "api" | "both";
 };
 
 export type CandidateResult = {
@@ -44,6 +53,8 @@ export type CandidateResult = {
   path: string | null;
   /** Route patterns from the lexicon that matched this session's URL. */
   matchedRoutes: string[];
+  /** Endpoints the session called that failed, and we could place in the repo. */
+  matchedApiRoutes: string[];
   /** Files reachable from those routes, within MAX_IMPORT_DEPTH. */
   reachableFiles: string[];
   /** Everything deployed in the window, before code-path filtering. */
@@ -111,8 +122,10 @@ export async function candidatesForSession(
     entry_url: string | null;
     started_at: string;
     release: string | null;
+    api_paths: string[];
   }>(
-    `SELECT id, project_id, entry_url, started_at, release FROM sessions WHERE id = $1`,
+    `SELECT id, project_id, entry_url, started_at, release, api_paths
+       FROM sessions WHERE id = $1`,
     [sessionId],
   );
   if (!session) return null;
@@ -127,6 +140,7 @@ export async function candidatesForSession(
     sessionId,
     path,
     matchedRoutes: [],
+    matchedApiRoutes: [],
     reachableFiles: [],
     deployedInWindow: 0,
     candidates: [],
@@ -176,20 +190,53 @@ export async function candidatesForSession(
   const matched = routes.filter((r) => routeMatches(r.route, path));
   base.matchedRoutes = matched.map((r) => r.route);
 
-  if (matched.length === 0) {
+  // Endpoints this session called that failed. A page reaches its own files
+  // through imports, but a backend handler is only ever reached over the
+  // network — so without this a server-side regression looks like "nothing
+  // that shipped touches this page", which reads as an exoneration of code
+  // nobody actually examined.
+  const apiEntities =
+    (session.api_paths ?? []).length > 0
+      ? await db.query<{ path: string; route: string }>(
+          `SELECT path, route FROM code_entities
+            WHERE project_id = $1 AND kind = 'api' AND route IS NOT NULL`,
+          [session.project_id],
+        )
+      : [];
+
+  const matchedApis = apiEntities.filter((entity) =>
+    (session.api_paths ?? []).some((called) => routeMatches(entity.route, called)),
+  );
+  base.matchedApiRoutes = matchedApis.map((r) => r.route);
+
+  if (matched.length === 0 && matchedApis.length === 0) {
     // Better to say we can't narrow than to fall back to "everything that
     // shipped" and let the caller mistake it for a filtered result.
     base.note =
       routes.length === 0
         ? "No routes indexed yet. Run a repository sync to build the lexicon."
-        : `No indexed route matches ${path}, so the code path can't be narrowed.`;
+        : (session.api_paths ?? []).length > 0
+          ? `No indexed route matches ${path}, and none of the endpoints this ` +
+            `session called (${(session.api_paths ?? []).slice(0, 3).join(", ")}) ` +
+            `matched a handler in the repository either.`
+          : `No indexed route matches ${path}, so the code path can't be narrowed.`;
     return base;
   }
 
-  const reachable = await reachableFrom(
-    session.project_id,
-    matched.map((r) => r.path),
-  );
+  // Kept apart rather than merged, because which chain reached a file is
+  // itself evidence about what could have caused what.
+  const [fromRoutes, fromApis] = await Promise.all([
+    matched.length > 0
+      ? reachableFrom(session.project_id, matched.map((r) => r.path))
+      : Promise.resolve([]),
+    matchedApis.length > 0
+      ? reachableFrom(session.project_id, matchedApis.map((r) => r.path))
+      : Promise.resolve([]),
+  ]);
+
+  const routeSet = new Set(fromRoutes);
+  const apiSet = new Set(fromApis);
+  const reachable = [...new Set([...fromRoutes, ...fromApis])];
   base.reachableFiles = reachable;
 
   const reachableSet = new Set(reachable);
@@ -197,7 +244,10 @@ export async function candidatesForSession(
   base.candidates = inWindow
     .map((c) => {
       const matchedFiles = (c.files_touched ?? []).filter((f) => reachableSet.has(f));
+      const viaApi = matchedFiles.some((f) => apiSet.has(f));
+      const viaRoute = matchedFiles.some((f) => routeSet.has(f));
       return {
+        reachedVia: (viaApi && viaRoute ? "both" : viaApi ? "api" : "route") as Candidate["reachedVia"],
         sha: c.sha,
         message: c.message.split("\n")[0],
         author: c.author,
@@ -212,7 +262,11 @@ export async function candidatesForSession(
     .filter((c) => c.matchedFiles.length > 0);
 
   if (base.candidates.length === 0) {
-    base.note = `${inWindow.length} commits shipped in the window, but none touched code this page reaches.`;
+    const reach =
+      matchedApis.length > 0
+        ? "code this page reaches, or the endpoints it called"
+        : "code this page reaches";
+    base.note = `${inWindow.length} commits shipped in the window, but none touched ${reach}.`;
   }
 
   return base;

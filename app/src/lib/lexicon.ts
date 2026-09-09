@@ -40,7 +40,8 @@ const IGNORED_PATH =
 
 export type Entity = {
   path: string;
-  kind: "route" | "component" | "module" | "flag";
+  /** "api" is a route served to the browser rather than rendered by it. */
+  kind: "route" | "api" | "component" | "module" | "flag";
   name: string;
   route: string | null;
   aliases: string[];
@@ -417,13 +418,197 @@ function tryExtensions(base: string, known: Set<string>): string | null {
 
 // --- classification --------------------------------------------------------
 
+/**
+ * Server-side languages worth indexing.
+ *
+ * Until now only frontend files were, so a regression in a Python or Go
+ * handler produced "nothing that shipped touches this page" -- which is worse
+ * than an incomplete answer, because it reads as an exoneration of the code
+ * when nobody had looked at most of it.
+ */
+const BACKEND_EXTENSIONS = /\.(py|go|rb|java|kt|rs|php|cs|ex|exs|scala)$/;
+
+/** Directories that usually mean "this runs on a server". */
+const SERVER_DIRS =
+  /(^|\/)(api|server|backend|services?|handlers?|controllers?|routes?|functions?|lambdas?)(\/|$)/;
+
+export function isBackendFile(path: string): boolean {
+  if (IGNORED_PATH.test(path)) return false;
+  if (BACKEND_EXTENSIONS.test(path)) return true;
+  // A TypeScript file can be server code too; the directory is the only hint
+  // available without reading it.
+  return SOURCE_EXTENSIONS.test(path) && SERVER_DIRS.test(path);
+}
+
+/**
+ * The HTTP path a file serves, from its location alone.
+ *
+ * Convention-based frameworks put the answer in the file path, which makes
+ * this exact rather than a guess. Everything else needs the source, and is
+ * handled by apiRoutesInSource below.
+ */
+export function apiRouteForPath(path: string): string | null {
+  // Next.js app router: app/api/checkout/validate/route.ts -> /api/checkout/validate
+  const appRouter = path.match(/(?:^|\/)app\/(api\/.*)\/route\.(tsx?|jsx?)$/);
+  if (appRouter) return normaliseApiSegments(appRouter[1]);
+
+  // Next.js pages router: pages/api/checkout.ts -> /api/checkout
+  const pagesRouter = path.match(/(?:^|\/)pages\/(api\/.+)\.(tsx?|jsx?)$/);
+  if (pagesRouter) return normaliseApiSegments(pagesRouter[1].replace(/\/index$/, ""));
+
+  // Serverless conventions: functions/checkout.ts, netlify/functions/checkout.js
+  const fn = path.match(/(?:^|\/)(?:netlify\/)?functions\/([\w-]+)\.(tsx?|jsx?|py|go|rb)$/);
+  if (fn) return `/.netlify/functions/${fn[1]}`;
+
+  return null;
+}
+
+function normaliseApiSegments(raw: string): string {
+  const segments = raw
+    .split("/")
+    .filter(Boolean)
+    .filter((s) => !(s.startsWith("(") && s.endsWith(")")))
+    .map((s) => {
+      if (/^\[\.\.\..+\]$/.test(s)) return "*";
+      if (/^\[.+\]$/.test(s)) return ":param";
+      return s;
+    });
+  return `/${segments.join("/")}`;
+}
+
+/**
+ * Routes declared in the source, for frameworks that register them by hand.
+ *
+ * Covers the decorator and router-call shapes used by FastAPI, Flask, Express,
+ * Fastify, Gin, Echo, Spring and net/http. It is pattern matching rather than
+ * parsing, so a route built at runtime from a variable is invisible -- and a
+ * route this misses simply means a backend commit stays out of the candidate
+ * set, which is the same blindness we had before rather than a new wrong
+ * answer.
+ *
+ * Only run on server-side files. The same shapes appear in frontend code as
+ * `axios.get("/api/x")`, which would otherwise register the caller as the
+ * thing being called.
+ */
+const ROUTE_PATTERNS = [
+  // @app.get("/x") / @router.post("/x") / @app.route("/x")  — FastAPI, Flask
+  /@\w+\.(?:get|post|put|patch|delete|route)\(\s*["'`]([^"'`]+)["'`]/gi,
+  // app.get("/x" / router.post('/x'  — Express, Fastify
+  /\b(?:app|router|r|srv|server|api)\.(?:get|post|put|patch|delete|all)\(\s*["'`]([^"'`]+)["'`]/g,
+  // r.GET("/x"  — Gin, Echo, chi
+  /\b\w+\.(?:GET|POST|PUT|PATCH|DELETE|Handle|HandleFunc)\(\s*["'`]([^"'`]+)["'`]/g,
+  // @GetMapping("/x") / @RequestMapping("/x")  — Spring
+  /@(?:Get|Post|Put|Patch|Delete|Request)Mapping\(\s*(?:value\s*=\s*)?["']([^"']+)["']/g,
+];
+
+export function apiRoutesInSource(source: string): string[] {
+  const found = new Set<string>();
+  for (const pattern of ROUTE_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source)) !== null) {
+      const route = match[1].trim();
+      // A bare "/" registers the whole site and matches everything, which
+      // makes it useless for narrowing.
+      if (!route.startsWith("/") || route === "/") continue;
+      found.add(normaliseRuntimeRoute(route));
+    }
+  }
+  return [...found];
+}
+
+/** Framework parameter syntax varies; the matcher only understands one form. */
+function normaliseRuntimeRoute(route: string): string {
+  return route
+    .replace(/\{[^}]+\}/g, ":param") // FastAPI, Spring
+    .replace(/:[A-Za-z_][\w]*/g, ":param") // Express, Gin
+    .replace(/<[^>]+>/g, ":param") // Flask
+    .replace(/\*+$/, "*")
+    .replace(/\/+$/, "") || "/";
+}
+
+/**
+ * Imports in server-side languages.
+ *
+ * Only local imports resolve to files we hold, which is the point -- a change
+ * inside a third-party package is not a commit in this repository and cannot
+ * be a candidate.
+ */
+const BACKEND_IMPORT_PATTERNS = [
+  /^\s*from\s+([.\w]+)\s+import\s/gm, // Python
+  /^\s*import\s+([.\w]+)\s*$/gm, // Python
+  /^\s*require\s+["']([^"']+)["']/gm, // Ruby
+  /^\s*import\s+"([^"]+)"/gm, // Go
+  /^\s*use\s+(?:crate|self|super)::([\w:]+)/gm, // Rust
+];
+
+export function parseBackendImports(source: string): string[] {
+  const found = new Set<string>();
+  for (const pattern of BACKEND_IMPORT_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source)) !== null) found.add(match[1]);
+  }
+  return [...found];
+}
+
+/**
+ * Resolve a server-side import to a file in the repository.
+ *
+ * Dotted and slashed module paths both map onto directories, so this tries the
+ * obvious translations and gives up rather than guessing. Anything unresolved
+ * is a package, and packages are out of scope.
+ */
+export function resolveBackendImport(
+  fromPath: string,
+  specifier: string,
+  known: Set<string>,
+): string | null {
+  const dir = fromPath.split("/").slice(0, -1);
+  const asPath = specifier.replace(/^\.+/, "").replace(/[.:]+/g, "/");
+  const leadingDots = (specifier.match(/^\.+/) ?? [""])[0].length;
+
+  const bases: string[] = [];
+  if (leadingDots > 0) {
+    // Python relative import: one dot is this package, each extra goes up.
+    const up = dir.slice(0, dir.length - (leadingDots - 1));
+    bases.push([...up, asPath].join("/"));
+  }
+  bases.push([...dir, asPath].join("/"), asPath);
+
+  for (const base of bases) {
+    for (const ext of [".py", ".go", ".rb", ".rs", ".java", ".kt", ".php", ".cs", "/__init__.py", "/mod.rs"]) {
+      const candidate = `${base}${ext}`;
+      if (known.has(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
 export function isIndexable(path: string): boolean {
-  return SOURCE_EXTENSIONS.test(path) && !IGNORED_PATH.test(path);
+  if (IGNORED_PATH.test(path)) return false;
+  return SOURCE_EXTENSIONS.test(path) || BACKEND_EXTENSIONS.test(path);
 }
 
 export function classify(path: string): Entity {
   const file = path.split("/").pop() ?? path;
-  const bare = file.replace(SOURCE_EXTENSIONS, "");
+  const bare = file.replace(SOURCE_EXTENSIONS, "").replace(BACKEND_EXTENSIONS, "");
+
+  // API routes are checked first: app/api/x/route.ts would otherwise be read
+  // as a page by the app-router rule.
+  const apiRoute = apiRouteForPath(path);
+  if (apiRoute) {
+    const words = apiRoute.split("/").filter((s) => s && !s.startsWith(":") && s !== "api");
+    const name = words.join(" ") || "api";
+    return {
+      path,
+      kind: "api",
+      name,
+      route: apiRoute,
+      aliases: [...new Set([...humanAliases(name), apiRoute, ...words])],
+    };
+  }
+
   const route = routeForPath(path);
 
   if (route !== null) {

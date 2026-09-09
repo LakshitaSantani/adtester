@@ -342,3 +342,11 @@ CREATE TABLE IF NOT EXISTS market_events (
 
 CREATE INDEX IF NOT EXISTS market_events_when
   ON market_events (project_id, occurred_on DESC);
+
+-- Endpoints a session called that failed.
+--
+-- The only thread from a session back to server-side code. A page reaches its
+-- own files through imports; a backend handler is only ever reached over the
+-- network, so without this a Python or Go regression is invisible no matter
+-- how well the repository is indexed.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS api_paths TEXT[] NOT NULL DEFAULT '{}';

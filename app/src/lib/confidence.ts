@@ -75,6 +75,10 @@ export type ScoreInput = {
   affectedSessions: number;
   /** How many candidates survived the same filters, this one included. */
   candidateCount: number;
+  /** Which evidence chain connects this change to the symptom. */
+  reachedVia: "route" | "api" | "both";
+  /** True when the symptom is a rejected request rather than a client error. */
+  symptomIsRequestFailure: boolean;
 };
 
 function counterfactualSignal(cf: Counterfactual): Signal {
@@ -134,11 +138,31 @@ function counterfactualSignal(cf: Counterfactual): Signal {
   };
 }
 
-function codePathSignal(matched: number, total: number): Signal {
+function codePathSignal(
+  matched: number,
+  total: number,
+  reachedVia: "route" | "api" | "both",
+  symptomIsRequestFailure: boolean,
+): Signal {
   // Touching one of two files is a sharper signal than one of two hundred:
   // a sprawling commit intersects the page's code by coincidence.
   const specificity = total > 0 ? matched / total : 0;
-  const score = matched === 0 ? 0 : Math.max(0.3, Math.min(1, specificity));
+  let score = matched === 0 ? 0 : Math.max(0.3, Math.min(1, specificity));
+
+  // A failed request was answered by the server. A change reached only through
+  // the page's imports cannot have produced that response, so it is a weaker
+  // explanation for this particular symptom — not an impossible one, since a
+  // frontend change can send a malformed request, which is why this discounts
+  // rather than excludes.
+  const wrongSideOfTheWire = symptomIsRequestFailure && reachedVia === "route";
+  if (wrongSideOfTheWire) score *= 0.4;
+
+  const where =
+    reachedVia === "api"
+      ? "reached from the endpoint that failed"
+      : reachedVia === "both"
+        ? "on this page's path and behind the endpoint that failed"
+        : "on this page's path";
 
   return {
     name: "codePath",
@@ -148,7 +172,10 @@ function codePathSignal(matched: number, total: number): Signal {
     detail:
       matched === 0
         ? "Touches nothing this page reaches."
-        : `${matched} of ${total} changed files are on this page's path.`,
+        : `${matched} of ${total} changed files are ${where}.` +
+          (wrongSideOfTheWire
+            ? " The failure was a rejected request, which the server answered, so client-side code is a weaker explanation."
+            : ""),
   };
 }
 
@@ -215,7 +242,12 @@ function dilutionSignal(candidates: number): Signal {
 export function score(input: ScoreInput): Scored {
   const signals: Signal[] = [
     counterfactualSignal(input.counterfactual),
-    codePathSignal(input.matchedFiles, input.filesTouched),
+    codePathSignal(
+      input.matchedFiles,
+      input.filesTouched,
+      input.reachedVia,
+      input.symptomIsRequestFailure,
+    ),
     onsetSignal(input.onsetGapHours),
     volumeSignal(input.affectedSessions),
     dilutionSignal(input.candidateCount),
