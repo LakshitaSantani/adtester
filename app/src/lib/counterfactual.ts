@@ -35,10 +35,34 @@ const MIN_GROUP_SIZE = 5;
 const TEMPORAL_WINDOW_HOURS = 72;
 
 /**
- * Below this the two windows land at different times of day, and a diurnal
- * traffic swing looks like a change in behaviour.
+ * Below this, two adjacent windows land at different times of day and a
+ * diurnal traffic swing looks like a change in behaviour.
+ *
+ * It is the threshold between two shapes of comparison, not a refusal. It
+ * used to be a refusal, and that made the tool useless exactly when it was
+ * needed: nothing could be investigated until a full day after the deploy,
+ * which is a day after anyone wants to know. Under a day, the comparison
+ * moves to the same clock hours on preceding days instead.
  */
 const MIN_TEMPORAL_WINDOW_HOURS = 24;
+
+/**
+ * How many preceding days the short-window comparison draws its control from.
+ *
+ * More than one, because a single previous day is one day's noise — a
+ * campaign, an outage, a public holiday. Rates are compared rather than
+ * counts, so an unequal number of days on either side costs nothing.
+ */
+const PRIOR_DAYS = 7;
+
+/**
+ * Under this much time since the deploy there is nothing to measure yet.
+ *
+ * Not a diurnal argument — an arithmetic one. Whoever is on the site in the
+ * first minutes after a deploy is whoever happened to be mid-session, and
+ * that is a sample of the clock rather than of the change.
+ */
+const MIN_ELAPSED_HOURS = 1;
 
 /**
  * Deploys within this of each other are one release event. Commits inside it
@@ -70,6 +94,16 @@ export type Counterfactual =
       /** Other commits that went out at the same moment. */
       coDeployed: number;
       deployedAt: string;
+      /**
+       * What the "before" group was.
+       *
+       * "adjacent" is the window immediately before the deploy. "prior_days"
+       * is the same clock hours on preceding days, used when the change is
+       * younger than a day and an adjacent window would compare times of day.
+       */
+      comparison: "adjacent" | "prior_days";
+      /** Hours on each side, so the report can say what it looked at. */
+      windowHours: number;
     }
   | {
       available: false;
@@ -303,42 +337,93 @@ async function tryTemporal(
   // rather than the code — the exact false pattern the counterfactual exists
   // to rule out.
   const sinceDeploy = (Date.now() - new Date(deployedAt).getTime()) / 3_600_000;
-  const windowHours = Math.min(TEMPORAL_WINDOW_HOURS, Math.max(1, sinceDeploy));
 
-  // Under a full day either side, the two windows sit at different times of
-  // day and the comparison is between a morning and an evening as much as
-  // between two builds.
-  if (windowHours < MIN_TEMPORAL_WINDOW_HOURS) {
+  if (sinceDeploy < MIN_ELAPSED_HOURS) {
     return {
       available: false,
       reason: "groups_too_small",
       detail:
-        `This deployed ${sinceDeploy.toFixed(1)} hours ago. Comparing that against ` +
-        `the same span beforehand would mostly measure the time of day. Worth ` +
-        `re-running once a full day has passed.`,
+        `This deployed ${Math.round(sinceDeploy * 60)} minutes ago — too recently for ` +
+        `anyone to have used the new code much. Worth re-running in an hour.`,
     };
   }
 
-  const [row] = await db.query<{
-    before_sessions: number;
-    before_affected: number;
-    after_sessions: number;
-    after_affected: number;
-  }>(
-    `SELECT
-       COUNT(*) FILTER (WHERE s.started_at <  $2::timestamptz)::int AS before_sessions,
-       COUNT(*) FILTER (WHERE s.started_at <  $2::timestamptz
-                          AND ${BROKE_HERE})::int AS before_affected,
-       COUNT(*) FILTER (WHERE s.started_at >= $2::timestamptz)::int AS after_sessions,
-       COUNT(*) FILTER (WHERE s.started_at >= $2::timestamptz
-                          AND ${BROKE_HERE})::int AS after_affected
-       FROM sessions s
-      WHERE s.project_id = $1
-        AND s.started_at >= $2::timestamptz - ($5 || ' hours')::interval
-        AND s.started_at <= $2::timestamptz + ($5 || ' hours')::interval
-        AND ${ON_PAGE}`,
-    [projectId, deployedAt, signature, path, String(windowHours)],
-  );
+  // Which control group to compare against depends on how long the change has
+  // been live.
+  //
+  // Once a day has passed, the window immediately before the deploy is the
+  // best control there is: it is the nearest thing in time, so the least has
+  // moved between the two sides.
+  //
+  // Before that, it is the worst control there is. Comparing the three hours
+  // after a lunchtime deploy against the three before it compares the
+  // lunchtime peak with the morning, and reports the clock as a regression.
+  // The same three hours on preceding days holds the time of day fixed, which
+  // is the confounder that actually bites at this length. What it gives up is
+  // adjacency — a week is long enough for the traffic mix to drift — and that
+  // is the right thing to give up, because a diurnal swing is guaranteed to
+  // be there and a week-long drift is not.
+  const dayAligned = sinceDeploy < MIN_TEMPORAL_WINDOW_HOURS;
+  const windowHours = dayAligned
+    ? sinceDeploy
+    : Math.min(TEMPORAL_WINDOW_HOURS, sinceDeploy);
+
+  const [row] = dayAligned
+    ? await db.query<{
+        before_sessions: number;
+        before_affected: number;
+        after_sessions: number;
+        after_affected: number;
+      }>(
+        // The window since the deploy, against the same clock window on each
+        // of the preceding days. Every prior window ends at or before the
+        // deploy, because the window is shorter than the day it is shifted
+        // by — so no session that ran the new code can land in the control.
+        `WITH after_window AS (
+           SELECT * FROM sessions s
+            WHERE s.project_id = $1
+              AND s.started_at >= $2::timestamptz
+              AND s.started_at <  $2::timestamptz + ($5 || ' hours')::interval
+              AND ${ON_PAGE}
+         ),
+         before_window AS (
+           SELECT s.* FROM sessions s
+             JOIN generate_series(1, $6::int) AS k ON true
+            WHERE s.project_id = $1
+              AND s.started_at >= $2::timestamptz - make_interval(days => k)
+              AND s.started_at <  $2::timestamptz - make_interval(days => k)
+                                  + ($5 || ' hours')::interval
+              AND ${ON_PAGE}
+         )
+         SELECT
+           (SELECT COUNT(*)::int FROM before_window s) AS before_sessions,
+           (SELECT COUNT(*)::int FROM before_window s WHERE ${BROKE_HERE})
+             AS before_affected,
+           (SELECT COUNT(*)::int FROM after_window s) AS after_sessions,
+           (SELECT COUNT(*)::int FROM after_window s WHERE ${BROKE_HERE})
+             AS after_affected`,
+        [projectId, deployedAt, signature, path, String(windowHours), String(PRIOR_DAYS)],
+      )
+    : await db.query<{
+        before_sessions: number;
+        before_affected: number;
+        after_sessions: number;
+        after_affected: number;
+      }>(
+        `SELECT
+           COUNT(*) FILTER (WHERE s.started_at <  $2::timestamptz)::int AS before_sessions,
+           COUNT(*) FILTER (WHERE s.started_at <  $2::timestamptz
+                              AND ${BROKE_HERE})::int AS before_affected,
+           COUNT(*) FILTER (WHERE s.started_at >= $2::timestamptz)::int AS after_sessions,
+           COUNT(*) FILTER (WHERE s.started_at >= $2::timestamptz
+                              AND ${BROKE_HERE})::int AS after_affected
+           FROM sessions s
+          WHERE s.project_id = $1
+            AND s.started_at >= $2::timestamptz - ($5 || ' hours')::interval
+            AND s.started_at <= $2::timestamptz + ($5 || ' hours')::interval
+            AND ${ON_PAGE}`,
+        [projectId, deployedAt, signature, path, String(windowHours)],
+      );
 
   const before = row?.before_sessions ?? 0;
   const after = row?.after_sessions ?? 0;
@@ -347,9 +432,12 @@ async function tryTemporal(
     return {
       available: false,
       reason: "groups_too_small",
-      detail:
-        `Only ${before} sessions on this page before the deploy and ${after} after. ` +
-        `Too few either side to tell a real difference from noise.`,
+      detail: dayAligned
+        ? `Only ${after} sessions on this page in the ${windowHours.toFixed(1)} hours ` +
+          `since the deploy, and ${before} in the same hours on the previous ` +
+          `${PRIOR_DAYS} days. Too few either side to tell a real difference from noise.`
+        : `Only ${before} sessions on this page before the deploy and ${after} after. ` +
+          `Too few either side to tell a real difference from noise.`,
     };
   }
 
@@ -377,5 +465,7 @@ async function tryTemporal(
     separation: afterRate - beforeRate,
     coDeployed: co?.n ?? 0,
     deployedAt,
+    comparison: dayAligned ? "prior_days" : "adjacent",
+    windowHours,
   };
 }

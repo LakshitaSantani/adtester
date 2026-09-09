@@ -156,9 +156,16 @@ function counterfactualSignal(cf: Counterfactual): Signal {
     score,
     contribution: score * WEIGHTS.counterfactual,
     detail:
-      `No build stamps, so this compares the same page either side of the deploy: ` +
-      `${withPct}% of ${cf.withChange.sessions} sessions after against ` +
-      `${withoutPct}% of ${cf.withoutChange.sessions} before${worseOrNot}` +
+      (cf.comparison === "prior_days"
+        ? `No build stamps, and this is only ${cf.windowHours.toFixed(1)} hours old, so ` +
+          `it compares the hours since the deploy against the same hours on the days ` +
+          `before — which holds the time of day fixed: ` +
+          `${withPct}% of ${cf.withChange.sessions} sessions since against ` +
+          `${withoutPct}% of ${cf.withoutChange.sessions} in the same hours earlier`
+        : `No build stamps, so this compares the same page either side of the deploy: ` +
+          `${withPct}% of ${cf.withChange.sessions} sessions after against ` +
+          `${withoutPct}% of ${cf.withoutChange.sessions} before`) +
+      worseOrNot +
       shared,
   };
 }

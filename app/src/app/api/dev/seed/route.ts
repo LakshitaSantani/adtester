@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend" | "fix-commit" | "traffic-shift";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend" | "fix-commit" | "traffic-shift" | "fresh-deploy";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -230,6 +230,28 @@ export async function POST(request: Request) {
     await db.query(`DELETE FROM commits WHERE project_id = $1 AND sha = 'b7d2e10'`, [pid]);
     await make("b7d2e10", NEW_BUILD_AT, 20, 40, 14, "/checkout");
     await make("a3f91c2", NEW_BUILD_AT, 20, 40, 1, "/checkout");
+  } else if (scenario === "fresh-deploy") {
+    // Three hours after a bad deploy, which is when anyone actually wants an
+    // answer. There are no build stamps, so the comparison has to be over
+    // time — and three hours either side of a deploy compares two different
+    // times of day, which is why this used to be refused outright until a
+    // full day had passed. The control is the same three clock hours on each
+    // of the preceding days instead.
+    const FRESH_AT = 3;
+    await db.query(
+      `UPDATE commits SET deployed_at = $2, authored_at = $2
+        WHERE project_id = $1 AND sha = 'a3f91c2'`,
+      [pid, at(FRESH_AT)],
+    );
+
+    // The same three clock hours on each of the previous seven days: ordinary
+    // traffic, the occasional unrelated failure.
+    for (let k = 1; k <= 7; k++) {
+      await make("", FRESH_AT + 24 * k, FRESH_AT, 12, 1, "/checkout");
+    }
+
+    // Since the deploy.
+    await make("", FRESH_AT, FRESH_AT, 40, 18, "/checkout");
   } else if (scenario === "traffic-shift") {
     // Checkout is completely unchanged — same traffic, same failure rate —
     // while the homepage campaign that carried most of the site's visitors
@@ -291,6 +313,12 @@ export async function POST(request: Request) {
       "against 35% of those without. Every other signal still points at it, so a " +
       "scorer that clamps negative evidence to zero reaches 0.48 and names the " +
       "repair as the cause. It should decline instead.",
+    "fresh-deploy":
+      "a3f91c2 deployed three hours ago and 45% of sessions since have hit this, " +
+      "against 8% in the same three hours on each of the previous seven days. " +
+      "Comparing three hours against the three before them would compare times of " +
+      "day, so this used to be refused until a full day had passed — a day after " +
+      "anyone needed it. It should now name a3f91c2 and cap at 0.85.",
     "traffic-shift":
       "Checkout is unchanged — 10% of its sessions failed last week and 10% failed " +
       "today. Only the homepage campaign stopped, taking site-wide traffic with it. " +
