@@ -80,6 +80,7 @@ export default async function ReportPage({
   const sessions = evidence.filter((e) => e.kind === "session");
   const intent = evidence.filter((e) => e.kind === "prd" || e.kind === "transcript");
   const analysis = evidence.find((e) => e.kind === "analysis");
+  const market = evidence.filter((e) => e.kind === "market");
   const a = analysis ? parse(analysis.detail) : null;
   const fix = (a?.fix ?? null) as Record<string, unknown> | null;
   const commits = evidence
@@ -276,6 +277,47 @@ export default async function ReportPage({
           verdict ? { wasCorrect: verdict.was_correct, note: verdict.note } : null
         }
       />
+
+      {market.length > 0 && (
+        <>
+          <h2>What else changed that week</h2>
+          <p className="lede small">
+            Outside your code, from public sources. Not scored, and deliberately not ranked
+            against the finding above — there is no way to test what would have happened
+            without a competitor&apos;s price change, so this is context for you to weigh
+            rather than a cause we can argue for.
+          </p>
+          {market.map((m) => {
+            const d = parse(m.detail);
+            const days = Number(d.daysBefore ?? 0);
+            return (
+              <div key={m.id} className="ev-block market-block">
+                <div className="ev-kind">
+                  {String(d.competitor ?? "competitor")}
+                  <span className="ev-score mono muted">
+                    {days > 0 ? `${days}d before` : days === 0 ? "same day" : `${-days}d after`}
+                  </span>
+                </div>
+                <div className="ev-body">
+                  <div className="candidate-msg">{m.quote}</div>
+                  {d.detail ? (
+                    <div className="small" style={{ marginTop: 4 }}>
+                      {String(d.detail)}
+                    </div>
+                  ) : null}
+                  <div className="candidate-meta">
+                    {String(d.eventKind ?? "")} · {String(d.occurredOn ?? "")}
+                    {d.dateExact === false ? " (date approximate)" : ""} ·{" "}
+                    <a href={String(m.ref)} target="_blank" rel="noreferrer noopener">
+                      source
+                    </a>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
 
       <div className="note">
         <b>How to read the numbers.</b> Everything except the comparison is circumstantial —

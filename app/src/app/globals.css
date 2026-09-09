@@ -480,3 +480,9 @@ select {
 .path-option:hover { background: var(--surface-2); }
 .path-option.on { background: var(--accent-wash); }
 .path-option input { width: auto; margin: 0; }
+
+/* ---------- market context ---------- */
+
+.ev-block.market-block { border-left: 3px solid var(--muted); }
+.market-block .candidate-msg { font-weight: 600; font-size: 14.5px; }
+.market-block a { text-decoration: underline; }

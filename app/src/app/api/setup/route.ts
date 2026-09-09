@@ -164,6 +164,10 @@ export async function POST(request: Request) {
       await enqueue(project.id, "sync_repo", { sinceDays: 30 });
       await enqueue(project.id, "index_repo");
     }
+    // Market research runs before the investigation so a finding can be
+    // published with its context already attached rather than appearing bare
+    // and gaining it minutes later.
+    await enqueue(project.id, "research_market");
     await enqueue(project.id, "investigate", {
       limit: 5,
       ...(oneShotKey ? { apiKey: encrypt(oneShotKey) } : {}),

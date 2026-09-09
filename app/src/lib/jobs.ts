@@ -15,7 +15,7 @@
 import { getDb } from "./db";
 import { newId } from "./ids";
 
-export type JobKind = "sync_repo" | "index_repo" | "infer_deploys" | "investigate" | "import_posthog";
+export type JobKind = "sync_repo" | "index_repo" | "infer_deploys" | "investigate" | "import_posthog" | "research_market";
 
 export type Job = {
   id: string;

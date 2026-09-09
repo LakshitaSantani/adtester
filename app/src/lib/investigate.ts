@@ -20,6 +20,7 @@ import { decrypt } from "./crypto";
 import { getDb } from "./db";
 import { getCommitDiff, type RepoRef } from "./github";
 import { findIntent, type IntentMatch } from "./intent";
+import { eventsAround } from "./market";
 import { buildTimeline, formatTimeline } from "./session-timeline";
 import { newId } from "./ids";
 import { resolveAnthropicKey } from "./secrets";
@@ -85,6 +86,10 @@ export async function investigate(
         WHERE id = $1`,
       [id, reason, note],
     );
+    // A refusal is exactly where what happened outside the code matters most.
+    // "Nothing you shipped explains this" is more useful with "and here is
+    // what changed in the market that week" beside it.
+    await attachMarketContext(id, projectId, symptom.startedAt);
     return {
       id,
       status: "declined",
@@ -237,6 +242,7 @@ export async function investigate(
   );
 
   await saveEvidence(id, ranked, symptom, intent, analysis);
+  await attachMarketContext(id, projectId, symptom.startedAt);
 
   return {
     id,
@@ -310,6 +316,53 @@ async function runAnalyst(
     symptom: description,
     intent,
   });
+}
+
+/**
+ * Record what changed outside the code around the same time.
+ *
+ * Stored with a contribution of null rather than zero, and under its own kind,
+ * so it can never be mistaken for a scored signal. There is no counterfactual
+ * for the market — no group of users who didn't experience a competitor's
+ * price cut — so presenting this on the same scale as a code finding would
+ * quietly undo the distinction the whole product rests on.
+ *
+ * It is context for a person to weigh, and it says so.
+ */
+async function attachMarketContext(
+  investigationId: string,
+  projectId: string,
+  when: string,
+): Promise<void> {
+  try {
+    const events = await eventsAround(projectId, when);
+    if (events.length === 0) return;
+    const db = await getDb();
+
+    for (const event of events.slice(0, 6)) {
+      await db.query(
+        `INSERT INTO evidence (id, investigation_id, kind, ref, quote, detail, contribution)
+         VALUES ($1,$2,'market',$3,$4,$5,NULL)`,
+        [
+          newId("ev"),
+          investigationId,
+          event.url,
+          event.headline,
+          JSON.stringify({
+            competitor: event.competitor,
+            eventKind: event.kind,
+            occurredOn: event.occurredOn,
+            daysBefore: event.daysBefore,
+            detail: event.detail,
+            dateExact: event.dateExact,
+          }),
+        ],
+      );
+    }
+  } catch (error) {
+    // Context is a bonus. It must never take down a finding.
+    console.log("investigate: could not attach market context", error);
+  }
 }
 
 function weakestLink(scored: Scored): string {

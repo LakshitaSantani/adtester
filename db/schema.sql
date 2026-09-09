@@ -310,3 +310,35 @@ CREATE TABLE IF NOT EXISTS company_profile (
   confirmed_at   TIMESTAMPTZ,
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ================================================================ market
+-- What changed outside the repository.
+--
+-- Everything else in this system rests on the counterfactual: compare people
+-- who got a change against people who didn't. There is no such comparison for
+-- "a competitor cut their price" -- you cannot A/B test the market, and no
+-- amount of data will ever produce a control group.
+--
+-- So these are stored as OBSERVATIONS, never as scored causes. Each one needs
+-- a date and a URL a person can open, because the only thing that makes this
+-- worth showing is that a reader can check it themselves. Anything without
+-- both is dropped rather than softened with a hedge.
+CREATE TABLE IF NOT EXISTS market_events (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  competitor   TEXT NOT NULL,
+  kind         TEXT NOT NULL,        -- pricing | launch | feature | funding | other
+  occurred_on  DATE NOT NULL,
+  headline     TEXT NOT NULL,
+  detail       TEXT,
+  url          TEXT NOT NULL,
+  -- Whether the date came from the source itself or was inferred from when it
+  -- was found. An inferred date can be weeks out, which matters when the whole
+  -- value is "this happened just before your numbers moved".
+  date_exact   BOOLEAN NOT NULL DEFAULT true,
+  discovered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, competitor, occurred_on, headline)
+);
+
+CREATE INDEX IF NOT EXISTS market_events_when
+  ON market_events (project_id, occurred_on DESC);

@@ -22,6 +22,9 @@ import { getDb } from "./db";
 import * as gh from "./github";
 import { importFromPostHog } from "./import-posthog";
 import { investigate } from "./investigate";
+import { RESEARCH_WINDOW_DAYS, researchCompetitor, saveEvents } from "./market";
+import { loadProfile } from "./profile";
+import { resolveAnthropicKey } from "./secrets";
 import type { PostHogConfig } from "./posthog";
 import { claimNext, fail, finish, type Job } from "./jobs";
 import {
@@ -278,6 +281,50 @@ async function importPostHog(job: Job): Promise<void> {
   }
 }
 
+/**
+ * Look up what competitors have been doing.
+ *
+ * Runs on a schedule rather than during an investigation, because search is
+ * slow and the answer to "what changed in the market last month" doesn't
+ * depend on which symptom is being looked at. By the time a finding needs
+ * context, the context is already there.
+ */
+async function researchMarket(job: Job): Promise<void> {
+  const profile = await loadProfile(job.project_id);
+  const competitors = profile?.competitors ?? [];
+
+  if (competitors.length === 0) {
+    console.log("research_market: no competitors named in the profile, nothing to look up");
+    return;
+  }
+
+  const apiKey = await resolveAnthropicKey(job.project_id);
+  if (!apiKey) {
+    console.log("research_market: needs an Anthropic key to search");
+    return;
+  }
+
+  const since = new Date(Date.now() - RESEARCH_WINDOW_DAYS * 86_400_000);
+  let total = 0;
+  let dropped = 0;
+
+  for (const competitor of competitors.slice(0, 8)) {
+    const events = await researchCompetitor(
+      competitor,
+      { whatWeDo: profile?.whatWeDo ?? null, since },
+      apiKey,
+    );
+    const saved = await saveEvents(job.project_id, events);
+    total += saved;
+    dropped += events.length - saved;
+  }
+
+  console.log(
+    `research_market: ${total} new observations across ${competitors.length} competitors` +
+      (dropped > 0 ? ` (${dropped} already known)` : ""),
+  );
+}
+
 async function inferDeploys(job: Job): Promise<void> {
   const count = await inferDeployTimes(job.project_id);
   console.log(`infer_deploys: filled ${count} deploy times`);
@@ -357,6 +404,7 @@ const HANDLERS: Record<string, (job: Job) => Promise<void>> = {
   infer_deploys: inferDeploys,
   investigate: runInvestigations,
   import_posthog: importPostHog,
+  research_market: researchMarket,
 };
 
 // Same reasoning as the database singleton: a hot reload must not start a
