@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   );
   if (!commit) return NextResponse.json({ error: "unknown commit" }, { status: 404 });
 
-  const candidates = await retrieveCandidates(
+  const { candidates, stats } = await retrieveCandidates(
     project.id,
     commit.files_touched,
     commit.message,
@@ -55,6 +55,7 @@ export async function POST(request: Request) {
     commit: commit.message,
     files: commit.files_touched,
     verifierEnabled: Boolean(process.env.ANTHROPIC_API_KEY),
+    stats,
     candidates: candidates.map((c) => ({
       score: c.score,
       matchedTerms: c.terms,

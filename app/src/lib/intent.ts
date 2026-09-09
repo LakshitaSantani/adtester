@@ -27,11 +27,29 @@ import { getDb } from "./db";
 /** How far back before a commit to look for the conversation about it. */
 const LOOKBACK_DAYS = 28;
 
-/** Chunks scoring below this aren't worth a model call. */
-const MIN_SCORE = 2;
+/**
+ * A single matching word is worth considering. Two was too strict: it threw
+ * away "the phone field is rejecting people", which scores 1 and is exactly
+ * the sort of thing we are looking for. The model does the judging; this
+ * threshold only decides what it is allowed to see.
+ */
+const MIN_SCORE = 1;
 
-/** Never send more than this to be verified, per commit. */
-const MAX_CANDIDATES = 12;
+/** Keyword matches sent for verification. */
+const MAX_MATCHES = 8;
+
+/**
+ * Slots reserved for documents that matched NOTHING.
+ *
+ * Keyword matching's real failure isn't ranking, it's blindness: a document
+ * that shares no vocabulary with the code is invisible, and we never find out.
+ * A team saying "mobile number" while the code says PhoneInput, or a project
+ * with an internal name, produces zero overlap and vanishes silently.
+ *
+ * So every document written in the run-up to the change gets at least one
+ * passage in front of the model, whether it matched or not.
+ */
+const MAX_COVERAGE = 6;
 
 export type IntentMatch = {
   chunkId: string;
@@ -78,12 +96,27 @@ const CONTEXT_TURNS = 2;
  * cleverer approach would add an API dependency and a vector index to solve a
  * problem this doesn't have yet. Worth revisiting if recall proves poor.
  */
+export type Candidate = { row: ChunkRow; score: number; terms: string[] };
+
+export type RetrievalStats = {
+  /** Passages that existed in the window at all. */
+  searched: number;
+  documents: number;
+  /** Passages that shared vocabulary with the change. */
+  matched: number;
+  /** Documents that matched nothing and were included anyway. */
+  coveredBlind: number;
+  /** Documents in the window that never reached the model. */
+  unseenDocuments: string[];
+  terms: string[];
+};
+
 export async function retrieveCandidates(
   projectId: string,
   changedFiles: string[],
   commitMessage: string,
   deployedAt: string | null,
-): Promise<Array<{ row: ChunkRow; score: number; terms: string[] }>> {
+): Promise<{ candidates: Candidate[]; stats: RetrievalStats }> {
   const db = await getDb();
 
   const entities = await db.query<{ aliases: string[]; name: string }>(
@@ -103,7 +136,16 @@ export async function retrieveCandidates(
     if (!COMMON_WORDS.has(word)) terms.add(word);
   }
 
-  if (terms.size === 0) return [];
+  const termList = [...terms];
+  if (termList.length === 0) {
+    return {
+      candidates: [],
+      stats: {
+        searched: 0, documents: 0, matched: 0, coveredBlind: 0,
+        unseenDocuments: [], terms: [],
+      },
+    };
+  }
 
   const before = deployedAt ? new Date(deployedAt) : new Date();
   const after = new Date(before.getTime() - LOOKBACK_DAYS * 86_400_000);
@@ -120,20 +162,57 @@ export async function retrieveCandidates(
     [projectId, after.toISOString(), before.toISOString()],
   );
 
-  const scored = rows
-    .map((row) => {
-      const haystack = row.text.toLowerCase();
-      const hits = [...terms].filter((term) => haystack.includes(term));
-      // Multi-word phrases are far stronger evidence than a single word:
-      // "phone input" matching is meaningful, "input" alone is not.
-      const score = hits.reduce((sum, t) => sum + (t.includes(" ") ? 3 : 1), 0);
-      return { row, score, terms: hits };
-    })
+  const allScored: Candidate[] = rows.map((row) => {
+    const haystack = row.text.toLowerCase();
+    const hits = termList.filter((term) => haystack.includes(term));
+    // Multi-word phrases are far stronger evidence than a single word:
+    // "phone input" matching is meaningful, "input" alone is not.
+    const score = hits.reduce((sum, t) => sum + (t.includes(" ") ? 3 : 1), 0);
+    return { row, score, terms: hits };
+  });
+
+  const matches = allScored
     .filter((c) => c.score >= MIN_SCORE)
     .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_CANDIDATES);
+    .slice(0, MAX_MATCHES);
 
-  return withConversationalContext(rows, scored);
+  // Give every unmatched document one passage anyway — its best-scoring
+  // chunk, or its opening if nothing scored at all. This is what stops a
+  // document being lost entirely just because it uses different words.
+  const representedDocs = new Set(matches.map((m) => m.row.document_id));
+  const byDocument = new Map<string, Candidate[]>();
+  for (const candidate of allScored) {
+    const group = byDocument.get(candidate.row.document_id) ?? [];
+    group.push(candidate);
+    byDocument.set(candidate.row.document_id, group);
+  }
+
+  const blind: Candidate[] = [];
+  for (const [documentId, group] of byDocument) {
+    if (representedDocs.has(documentId)) continue;
+    const best = [...group].sort(
+      (a, b) => b.score - a.score || a.row.position - b.row.position,
+    )[0];
+    if (best) blind.push(best);
+  }
+  blind.sort((a, b) => b.score - a.score);
+  const covered = blind.slice(0, MAX_COVERAGE);
+
+  const unseen = blind.slice(MAX_COVERAGE).map((c) => c.row.title ?? "Untitled");
+
+  const stats: RetrievalStats = {
+    searched: rows.length,
+    documents: byDocument.size,
+    matched: matches.length,
+    coveredBlind: covered.length,
+    unseenDocuments: [...new Set(unseen)],
+    terms: termList,
+  };
+
+  return {
+    candidates: withConversationalContext(rows, [...matches, ...covered]),
+    stats,
+  };
 }
 
 /**
@@ -150,8 +229,8 @@ export async function retrieveCandidates(
  */
 function withConversationalContext(
   all: ChunkRow[],
-  matches: Array<{ row: ChunkRow; score: number; terms: string[] }>,
-): Array<{ row: ChunkRow; score: number; terms: string[] }> {
+  matches: Candidate[],
+): Candidate[] {
   const chosen = new Map(matches.map((m) => [m.row.id, m]));
 
   for (const match of matches) {
@@ -189,7 +268,7 @@ const COMMON_WORDS = new Set([
  * discouraged.
  */
 export async function verifyMatches(
-  candidates: Array<{ row: ChunkRow; score: number; terms: string[] }>,
+  candidates: Candidate[],
   commitMessage: string,
   changedFiles: string[],
   symptom: string,
@@ -306,12 +385,25 @@ export async function findIntent(
   commit: { sha: string; message: string; files: string[]; deployedAt: string | null },
   symptom: string,
 ): Promise<IntentMatch[]> {
-  const candidates = await retrieveCandidates(
+  const { candidates, stats } = await retrieveCandidates(
     projectId,
     commit.files,
     commit.message,
     commit.deployedAt,
   );
+
+  // Say what was and wasn't looked at. Silent recall failure is the worst
+  // outcome here — a missing explanation looks identical to "there wasn't
+  // one", and nobody would ever know to go and check.
+  console.log(
+    `intent: ${stats.searched} passages across ${stats.documents} documents, ` +
+      `${stats.matched} matched on wording, ${stats.coveredBlind} unmatched documents ` +
+      `included anyway` +
+      (stats.unseenDocuments.length > 0
+        ? ` | NOT looked at: ${stats.unseenDocuments.join(", ")}`
+        : ""),
+  );
+
   if (candidates.length === 0) return [];
   return verifyMatches(candidates, commit.message, commit.files, symptom);
 }
