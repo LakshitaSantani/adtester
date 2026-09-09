@@ -35,6 +35,12 @@ const MIN_GROUP_SIZE = 5;
 const TEMPORAL_WINDOW_HOURS = 72;
 
 /**
+ * Below this the two windows land at different times of day, and a diurnal
+ * traffic swing looks like a change in behaviour.
+ */
+const MIN_TEMPORAL_WINDOW_HOURS = 24;
+
+/**
  * Deploys within this of each other are one release event. Commits inside it
  * are indistinguishable by timing alone, which is worth saying out loud
  * rather than pretending to separate them.
@@ -240,6 +246,30 @@ async function tryTemporal(
   signature: string,
   path: string | null,
 ): Promise<Counterfactual> {
+  // Match the two windows to whichever side is shorter.
+  //
+  // A commit deployed two hours ago would otherwise be compared against 72
+  // hours of "before" and 2 hours of "after". Traffic swings between night and
+  // day, so an unmatched comparison manufactures a difference out of the clock
+  // rather than the code — the exact false pattern the counterfactual exists
+  // to rule out.
+  const sinceDeploy = (Date.now() - new Date(deployedAt).getTime()) / 3_600_000;
+  const windowHours = Math.min(TEMPORAL_WINDOW_HOURS, Math.max(1, sinceDeploy));
+
+  // Under a full day either side, the two windows sit at different times of
+  // day and the comparison is between a morning and an evening as much as
+  // between two builds.
+  if (windowHours < MIN_TEMPORAL_WINDOW_HOURS) {
+    return {
+      available: false,
+      reason: "groups_too_small",
+      detail:
+        `This deployed ${sinceDeploy.toFixed(1)} hours ago. Comparing that against ` +
+        `the same span beforehand would mostly measure the time of day. Worth ` +
+        `re-running once a full day has passed.`,
+    };
+  }
+
   const [row] = await db.query<{
     before_sessions: number;
     before_affected: number;
@@ -258,7 +288,7 @@ async function tryTemporal(
         AND s.started_at >= $2::timestamptz - ($5 || ' hours')::interval
         AND s.started_at <= $2::timestamptz + ($5 || ' hours')::interval
         AND ${ON_PAGE}`,
-    [projectId, deployedAt, signature, path, String(TEMPORAL_WINDOW_HOURS)],
+    [projectId, deployedAt, signature, path, String(windowHours)],
   );
 
   const before = row?.before_sessions ?? 0;

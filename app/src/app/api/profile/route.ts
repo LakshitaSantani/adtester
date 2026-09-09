@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { resolveProject } from "@/lib/auth";
-import { draftProfile, saveProfile, type Profile } from "@/lib/profile";
+import { enqueue } from "@/lib/jobs";
+import { draftProfile, loadProfile, saveProfile, type Profile } from "@/lib/profile";
+import { ensureWorker } from "@/lib/worker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +21,7 @@ export async function POST(request: Request) {
   // Keep what we guessed alongside what they said, so a bad guess stays
   // visible rather than being quietly replaced by the correction.
   const draft = await draftProfile(project.id);
+  const before = await loadProfile(project.id);
 
   await saveProfile(
     project.id,
@@ -34,5 +37,18 @@ export async function POST(request: Request) {
     draft,
   );
 
-  return NextResponse.json({ saved: true });
+  // Naming a competitor is the act of asking about them. Waiting for someone
+  // to also press "run the analysis" on a different page meant the answer
+  // never arrived and nothing said why.
+  const saved = await loadProfile(project.id);
+  const changed =
+    JSON.stringify((before?.competitors ?? []).slice().sort()) !==
+    JSON.stringify((saved?.competitors ?? []).slice().sort());
+
+  if (changed && (saved?.competitors ?? []).length > 0) {
+    await enqueue(project.id, "research_market");
+    ensureWorker();
+  }
+
+  return NextResponse.json({ saved: true, researching: changed });
 }

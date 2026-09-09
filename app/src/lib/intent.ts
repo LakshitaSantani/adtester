@@ -24,8 +24,16 @@
 
 import { getDb } from "./db";
 
-/** How far back before a commit to look for the conversation about it. */
-const LOOKBACK_DAYS = 28;
+/**
+ * How far back before a commit to look for the conversation about it.
+ *
+ * Transcripts and documents get different windows on purpose. A meeting that
+ * shaped a change usually happened recently; a PRD is written once and governs
+ * work for a quarter, so a fixed month made approved specs invisible to the
+ * releases they were written for.
+ */
+const LOOKBACK_DAYS_TRANSCRIPT = 28;
+const LOOKBACK_DAYS_DOCUMENT = 120;
 
 /**
  * A single matching word is worth considering. Two was too strict: it threw
@@ -148,7 +156,8 @@ export async function retrieveCandidates(
   }
 
   const before = deployedAt ? new Date(deployedAt) : new Date();
-  const after = new Date(before.getTime() - LOOKBACK_DAYS * 86_400_000);
+  const transcriptsAfter = new Date(before.getTime() - LOOKBACK_DAYS_TRANSCRIPT * 86_400_000);
+  const documentsAfter = new Date(before.getTime() - LOOKBACK_DAYS_DOCUMENT * 86_400_000);
 
   const rows = await db.query<ChunkRow>(
     `SELECT c.id, c.document_id, c.position, c.text, c.speaker,
@@ -157,9 +166,17 @@ export async function retrieveCandidates(
        JOIN documents d ON d.id = c.document_id
       WHERE c.project_id = $1
         AND (c.occurred_at IS NULL
-             OR (c.occurred_at >= $2::timestamptz AND c.occurred_at <= $3::timestamptz))
+             OR (c.occurred_at <= $3::timestamptz
+                 AND c.occurred_at >= CASE WHEN d.source = 'transcript'
+                                           THEN $2::timestamptz
+                                           ELSE $4::timestamptz END))
       LIMIT 4000`,
-    [projectId, after.toISOString(), before.toISOString()],
+    [
+      projectId,
+      transcriptsAfter.toISOString(),
+      before.toISOString(),
+      documentsAfter.toISOString(),
+    ],
   );
 
   const allScored: Candidate[] = rows.map((row) => {
@@ -190,8 +207,17 @@ export async function retrieveCandidates(
   const blind: Candidate[] = [];
   for (const [documentId, group] of byDocument) {
     if (representedDocs.has(documentId)) continue;
+    // Ties break toward the middle of a document, not the start.
+    //
+    // The opening of a 45-minute call is "can you hear me" and "thanks for
+    // joining"; the decision that mattered is somewhere in the middle. Taking
+    // position 0 on a tie meant a document with no keyword overlap always
+    // offered up its greetings, which is the least useful passage it contains.
+    const midpoint = (group.length - 1) / 2;
     const best = [...group].sort(
-      (a, b) => b.score - a.score || a.row.position - b.row.position,
+      (a, b) =>
+        b.score - a.score ||
+        Math.abs(a.row.position - midpoint) - Math.abs(b.row.position - midpoint),
     )[0];
     if (best) blind.push(best);
   }
