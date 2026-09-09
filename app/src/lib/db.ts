@@ -13,7 +13,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export type Row = Record<string, unknown>;
@@ -45,17 +45,27 @@ async function createPglite(): Promise<Db> {
   const dir = path.resolve(DATA_DIR, "pg");
   mkdirSync(dir, { recursive: true });
 
+  // Refuse to be the second process in here.
+  //
+  // PGlite is Postgres compiled to WASM and embedded in one process. Nothing
+  // stops a second process opening the same directory, and nothing warns you
+  // that you have: the two write over each other and the damage surfaces
+  // later as a database that won't open. A one-line script run against
+  // ./data/pg while the dev server is up is enough to lose the data — which
+  // is exactly how this was found.
+  //
+  // Postgres's own postmaster.pid can't answer the question. It holds a pid
+  // from inside the WASM runtime, which has nothing to do with any process on
+  // this machine. So we keep our own, holding a real one.
+  claimDataDir(dir);
+
   // Clear a stale lock left by an unclean shutdown.
   //
   // Postgres writes postmaster.pid while running and removes it on exit. Kill
   // the dev server (Ctrl-C, a crash, `pkill`) and the file survives, after
   // which every subsequent open aborts the process with an unhelpful
-  // "Aborted()" — which looks like database corruption and isn't.
-  //
-  // Deleting it is safe *here specifically* because PGlite is embedded and
-  // single-process: the singleton above guarantees one instance per process,
-  // and the standalone worker refuses to run without DATABASE_URL. So if a
-  // lock file exists at the moment we open, nothing is holding it.
+  // "Aborted()" — which looks like database corruption and isn't. Safe to
+  // delete only because the claim above just proved nothing else is running.
   try {
     rmSync(path.join(dir, "postmaster.pid"), { force: true });
   } catch {
@@ -89,6 +99,7 @@ async function createPglite(): Promise<Db> {
   // Give it the chance to shut down cleanly so the next start doesn't rely
   // on the recovery above.
   const close = () => {
+    releaseDataDir(dir);
     void pg.close().catch(() => {});
   };
   process.once("SIGINT", close);
@@ -108,6 +119,55 @@ async function createPglite(): Promise<Db> {
       await pg.exec(sql);
     },
   };
+}
+
+/** Our own lock file, holding a pid this machine's kernel knows about. */
+const LOCK_FILE = "owner.pid";
+
+function isAlive(pid: number): boolean {
+  try {
+    // Signal 0 checks for the process without touching it.
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means it exists and belongs to someone else — still alive.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function claimDataDir(dir: string): void {
+  const lock = path.join(dir, LOCK_FILE);
+
+  let holder: number | null = null;
+  try {
+    holder = Number.parseInt(readFileSync(lock, "utf8").trim(), 10);
+  } catch {
+    /* no lock, or an unreadable one — either way it holds nobody */
+  }
+
+  if (holder && holder !== process.pid && Number.isFinite(holder) && isAlive(holder)) {
+    throw new Error(
+      `The local database at ${dir} is already open in process ${holder}. ` +
+        `It is an embedded, single-process database, and a second one writing ` +
+        `to it corrupts both. Stop that process first — or, to run two things ` +
+        `at once, point them at a real Postgres with DATABASE_URL. To read or ` +
+        `change data while the dev server is running, go through its HTTP API ` +
+        `rather than opening this directory.`,
+    );
+  }
+
+  writeFileSync(lock, String(process.pid), "utf8");
+}
+
+function releaseDataDir(dir: string): void {
+  try {
+    const lock = path.join(dir, LOCK_FILE);
+    if (Number.parseInt(readFileSync(lock, "utf8").trim(), 10) === process.pid) {
+      rmSync(lock, { force: true });
+    }
+  } catch {
+    /* nothing held, or already gone */
+  }
 }
 
 async function createPg(connectionString: string): Promise<Db> {
