@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveProject } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/ids";
 import { enqueue } from "@/lib/jobs";
@@ -32,10 +33,7 @@ export async function POST(request: Request) {
   if (!body.token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
   const db = await getDb();
-  const project = await db.one<{ id: string }>(
-    `SELECT id FROM projects WHERE view_token = $1`,
-    [body.token],
-  );
+  const project = await resolveProject(body.token, "admin");
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const config: PostHogConfig = {
@@ -90,10 +88,7 @@ export async function PUT(request: Request) {
   if (!body.token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
   const db = await getDb();
-  const project = await db.one<{ id: string }>(
-    `SELECT id FROM projects WHERE view_token = $1`,
-    [body.token],
-  );
+  const project = await resolveProject(body.token, "admin");
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   await enqueue(project.id, "import_posthog", {

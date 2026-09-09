@@ -7,6 +7,7 @@ type Created = {
   name: string;
   installKey: string;
   viewToken: string;
+  adminToken: string;
 };
 
 export default function Home() {
@@ -28,7 +29,7 @@ export default function Home() {
       const created = (await response.json()) as Created;
       // Straight into setup — a project with nothing connected can't do
       // anything, so stopping here to admire a key would be a dead end.
-      window.location.href = `/p/${created.viewToken}/setup`;
+      window.location.href = `/p/${created.adminToken}/setup`;
     } catch (e) {
       setError(
         e instanceof Error

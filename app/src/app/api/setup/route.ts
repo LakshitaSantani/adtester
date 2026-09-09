@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { resolveProject } from "@/lib/auth";
+import { encrypt } from "@/lib/crypto";
 import { getDb } from "@/lib/db";
 import { getRepoMeta, parseRepo } from "@/lib/github";
 import { newId } from "@/lib/ids";
@@ -15,6 +17,8 @@ type Body = {
   posthog?: { host?: string; projectId?: string; apiKey?: string } | null;
   repo?: { url?: string; accessToken?: string } | null;
   anthropicKey?: string | null;
+  /** When false the key is verified, used for this run, and never stored. */
+  storeAnthropicKey?: boolean;
   run?: boolean;
 };
 
@@ -36,14 +40,13 @@ export async function POST(request: Request) {
   if (!body.token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
   const db = await getDb();
-  const project = await db.one<{ id: string }>(
-    `SELECT id FROM projects WHERE view_token = $1`,
-    [body.token],
-  );
+  const project = await resolveProject(body.token, "admin");
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const errors: Record<string, string> = {};
   const connected: string[] = [];
+  /** Set when the key was verified but deliberately not stored. */
+  let oneShotKey: string | null = null;
 
   // --- PostHog -------------------------------------------------------------
 
@@ -60,7 +63,7 @@ export async function POST(request: Request) {
          VALUES ($1,$2,'posthog',$3)
          ON CONFLICT (project_id, kind) DO UPDATE SET
            config = EXCLUDED.config, last_error = NULL`,
-        [newId("src"), project.id, JSON.stringify(config)],
+        [newId("src"), project.id, JSON.stringify({ ...config, apiKey: encrypt(config.apiKey) })],
       );
       connected.push("posthog");
     } catch (error) {
@@ -98,7 +101,7 @@ export async function POST(request: Request) {
             parsed.owner,
             parsed.name,
             defaultBranch,
-            body.repo.accessToken ?? null,
+            body.repo.accessToken ? encrypt(body.repo.accessToken) : null,
           ],
         );
         connected.push("github");
@@ -130,9 +133,14 @@ export async function POST(request: Request) {
       });
       if (check.status === 401 || check.status === 403) {
         errors.anthropic = "Anthropic rejected that key.";
-      } else {
+      } else if (body.storeAnthropicKey) {
         await saveSecret(project.id, "anthropic", key);
         connected.push("anthropic");
+      } else {
+        // Verified and deliberately not stored. It rides along with this run
+        // in the job payload and is wiped when the job finishes.
+        oneShotKey = key;
+        connected.push("anthropic (this run only)");
       }
     } catch {
       errors.anthropic = "Could not reach Anthropic to check the key.";
@@ -156,7 +164,10 @@ export async function POST(request: Request) {
       await enqueue(project.id, "sync_repo", { sinceDays: 30 });
       await enqueue(project.id, "index_repo");
     }
-    await enqueue(project.id, "investigate", { limit: 5 });
+    await enqueue(project.id, "investigate", {
+      limit: 5,
+      ...(oneShotKey ? { apiKey: encrypt(oneShotKey) } : {}),
+    });
     ensureWorker();
   }
 

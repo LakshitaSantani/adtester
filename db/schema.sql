@@ -258,3 +258,9 @@ CREATE INDEX IF NOT EXISTS sessions_external
 -- the one that matched keywords -- somebody raises a concern using the words
 -- from the code, and the answer that overrules them shares none of them.
 ALTER TABLE chunks ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0;
+
+-- The second link. `view_token` reads; `admin_token` also configures and
+-- spends. Nullable so projects created before the split keep working -- see
+-- resolveProject, which treats a missing admin token as "the view token still
+-- has its old powers".
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS admin_token TEXT UNIQUE;

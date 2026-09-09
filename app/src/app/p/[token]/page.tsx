@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { resolveProject } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -64,10 +65,7 @@ export default async function Dashboard({
   const { token } = await params;
   const db = await getDb();
 
-  const project = await db.one<{ id: string; name: string; install_key: string }>(
-    `SELECT id, name, install_key FROM projects WHERE view_token = $1`,
-    [token],
-  );
+  const project = await resolveProject(token, "view");
   if (!project) notFound();
 
   const sessions = await db.query<SessionRow>(
@@ -113,7 +111,7 @@ export default async function Dashboard({
           Paste the snippet into a page and load it. Recordings appear here within about ten
           seconds.
           <pre className="snippet" style={{ marginTop: 20, textAlign: "left" }}>
-            {`<script src="/rec.js" data-swy-key="${project.install_key}" async></script>`}
+            {`<script src="/rec.js" data-swy-key="${project.installKey}" async></script>`}
           </pre>
         </div>
       ) : (

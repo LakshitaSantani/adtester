@@ -75,10 +75,19 @@ export async function claimNext(): Promise<Job | null> {
   };
 }
 
+/**
+ * Mark a job done and drop its payload.
+ *
+ * A payload can carry a credential supplied for one run only. Keeping it
+ * after the work is finished would quietly turn "don't store my key" into
+ * storing it in a different table.
+ */
 export async function finish(jobId: string): Promise<void> {
   const db = await getDb();
   await db.query(
-    `UPDATE jobs SET status = 'done', completed_at = now(), last_error = NULL WHERE id = $1`,
+    `UPDATE jobs SET status = 'done', completed_at = now(), last_error = NULL,
+            payload = '{}'::jsonb
+      WHERE id = $1`,
     [jobId],
   );
 }
@@ -96,7 +105,8 @@ export async function fail(job: Job, error: unknown): Promise<void> {
 
   await db.query(
     giveUp
-      ? `UPDATE jobs SET status = 'failed', last_error = $2, completed_at = now() WHERE id = $1`
+      ? `UPDATE jobs SET status = 'failed', last_error = $2, completed_at = now(),
+             payload = '{}'::jsonb WHERE id = $1`
       : `UPDATE jobs SET status = 'pending', last_error = $2,
              run_after = now() + ($3 || ' seconds')::interval WHERE id = $1`,
     giveUp ? [job.id, message] : [job.id, message, String(backoffSeconds)],

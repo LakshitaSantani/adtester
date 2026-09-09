@@ -9,6 +9,8 @@ export const newSessionId = (): string => randomUUID().replace(/-/g, "");
 export const newProjectId = (): string => `prj_${token(8)}`;
 export const newInstallKey = (): string => `key_${token(9)}`;
 export const newViewToken = (): string => `v_${token(18)}`;
+/** Longer than the view token: it is the one that can spend money. */
+export const newAdminToken = (): string => `a_${token(24)}`;
 export const newId = (prefix: string): string => `${prefix}_${token(8)}`;
 
 /**

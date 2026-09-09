@@ -29,6 +29,9 @@ export default function SetupForm({
   const [repoUrl, setRepoUrl] = useState(state.repo.label ?? "");
   const [repoToken, setRepoToken] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
+  // Off by default. The most expensive key is the one least worth leaving at
+  // rest, and a manual run can just as easily carry it.
+  const [storeKey, setStoreKey] = useState(false);
 
   const [busy, setBusy] = useState<string | null>(null);
   const [errors, setErrors] = useState<Errors>({});
@@ -46,6 +49,7 @@ export default function SetupForm({
           posthog: phKey ? { host, projectId: phProject, apiKey: phKey } : null,
           repo: repoUrl ? { url: repoUrl, accessToken: repoToken || undefined } : null,
           anthropicKey: anthropicKey || null,
+          storeAnthropicKey: storeKey,
           run,
         }),
       });
@@ -248,6 +252,27 @@ export default function SetupForm({
           autoComplete="off"
           onChange={(e) => setAnthropicKey(e.target.value)}
         />
+        <label
+          style={{
+            display: "flex", alignItems: "flex-start", gap: 8,
+            marginTop: 12, textTransform: "none", letterSpacing: 0, fontSize: 13,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={storeKey}
+            onChange={(e) => setStoreKey(e.target.checked)}
+            style={{ width: "auto", marginTop: 2 }}
+          />
+          <span>
+            Save this key for future runs. Leave it off and it is used for this run only and
+            never written down — safer, but you will paste it again next time.
+          </span>
+        </label>
+        <p className="small muted">
+          Worth creating a key with a spend limit for this. If it ever leaks, the damage is
+          capped at whatever you set.
+        </p>
         {errors.anthropic && <div className="note warn">{errors.anthropic}</div>}
       </Step>
 

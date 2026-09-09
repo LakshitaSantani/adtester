@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveProject } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { newId, newSessionId } from "@/lib/ids";
 
@@ -27,10 +28,7 @@ export async function POST(request: Request) {
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
   const db = await getDb();
-  const project = await db.one<{ id: string }>(
-    `SELECT id FROM projects WHERE view_token = $1`,
-    [token],
-  );
+  const project = await resolveProject(token, "admin");
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const pid = project.id;

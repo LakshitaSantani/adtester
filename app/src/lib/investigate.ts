@@ -16,6 +16,7 @@ import { analyse, fetchFileContents, type Analysis } from "./analyst";
 import { candidatesForSession, type Candidate } from "./candidates";
 import { score, type Scored } from "./confidence";
 import { testCounterfactual, type Counterfactual } from "./counterfactual";
+import { decrypt } from "./crypto";
 import { getDb } from "./db";
 import { getCommitDiff, type RepoRef } from "./github";
 import { findIntent, type IntentMatch } from "./intent";
@@ -64,6 +65,8 @@ export type Investigation = {
 export async function investigate(
   projectId: string,
   symptom: Symptom,
+  /** A key supplied for this run only, when the project stored none. */
+  suppliedKey?: string | null,
 ): Promise<Investigation> {
   const db = await getDb();
   const id = newId("inv");
@@ -194,7 +197,7 @@ export async function investigate(
   // looking for what the team said they were building. Running this over
   // every candidate would cost a model call each to explain changes we are
   // about to discard.
-  const apiKey = await resolveAnthropicKey(projectId);
+  const apiKey = suppliedKey ?? (await resolveAnthropicKey(projectId));
 
   let intent: IntentMatch[] = [];
   try {
@@ -273,7 +276,7 @@ async function runAnalyst(
   );
 
   const repo: RepoRef | null = repoRow
-    ? { owner: repoRow.owner, name: repoRow.name, token: repoRow.access_token }
+    ? { owner: repoRow.owner, name: repoRow.name, token: decrypt(repoRow.access_token) }
     : null;
 
   const [diff, fileContents] = repo

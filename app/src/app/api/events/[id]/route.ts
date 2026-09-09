@@ -26,7 +26,7 @@ export async function GET(
   const session = await db.one<{ id: string }>(
     `SELECT s.id FROM sessions s
        JOIN projects p ON p.id = s.project_id
-      WHERE s.id = $1 AND p.view_token = $2`,
+      WHERE s.id = $1 AND (p.view_token = $2 OR p.admin_token = $2)`,
     [id, token],
   );
   if (!session) {

@@ -5,14 +5,16 @@
  * product. They live in the `data_sources` table alongside the rest of a
  * connection's config.
  *
- * Stored in plain text in the database, which is honest for a prototype run
- * by people who know each other and wrong for anything else. Two rules keep
- * it from being worse than it needs to be: a key is never returned by any
- * API, and anything shown back is a masked hint rather than the value.
- * Encryption at rest, and not holding customer keys at all, are phase 6
- * problems — see the note in the setup page.
+ * Encrypted at rest, so a database file that ends up in a backup or on a
+ * laptop doesn't hand over three services. That is the limit of what
+ * encryption buys here — the key lives on the same server — and the real fix
+ * above it is not holding customer credentials at all.
+ *
+ * Two further rules: a key is never returned by any API, and anything shown
+ * back is a masked hint rather than the value.
  */
 
+import { decrypt, encrypt } from "./crypto";
 import { getDb } from "./db";
 import { newId } from "./ids";
 
@@ -28,7 +30,7 @@ export async function saveSecret(
     `INSERT INTO data_sources (id, project_id, kind, config)
      VALUES ($1,$2,$3,$4)
      ON CONFLICT (project_id, kind) DO UPDATE SET config = EXCLUDED.config, last_error = NULL`,
-    [newId("src"), projectId, kind, JSON.stringify({ key: value })],
+    [newId("src"), projectId, kind, JSON.stringify({ key: encrypt(value) })],
   );
 }
 
@@ -44,7 +46,8 @@ export async function getSecret(
   if (!row) return null;
   const config = typeof row.config === "string" ? JSON.parse(row.config) : row.config;
   const key = (config as { key?: unknown }).key;
-  return typeof key === "string" && key.trim() ? key : null;
+  if (typeof key !== "string" || !key.trim()) return null;
+  return decrypt(key);
 }
 
 /**

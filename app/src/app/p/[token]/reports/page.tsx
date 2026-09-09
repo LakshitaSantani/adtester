@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { resolveProject } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { ensureWorker } from "@/lib/worker";
 import RunInvestigation from "./RunInvestigation";
@@ -42,10 +43,7 @@ export default async function ReportsPage({
   ensureWorker();
   const db = await getDb();
 
-  const project = await db.one<{ id: string; name: string }>(
-    `SELECT id, name FROM projects WHERE view_token = $1`,
-    [token],
-  );
+  const project = await resolveProject(token, "view");
   if (!project) notFound();
 
   const investigations = await db.query<InvestigationRow>(

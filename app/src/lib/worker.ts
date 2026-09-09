@@ -17,6 +17,7 @@ import { Readable } from "node:stream";
 import { createGunzip } from "node:zlib";
 
 import { candidatesForSession } from "./candidates";
+import { decrypt } from "./crypto";
 import { getDb } from "./db";
 import * as gh from "./github";
 import { importFromPostHog } from "./import-posthog";
@@ -51,11 +52,12 @@ type RepoRow = {
 
 async function loadRepo(projectId: string): Promise<RepoRow | null> {
   const db = await getDb();
-  return db.one<RepoRow>(
+  const row = await db.one<RepoRow>(
     `SELECT id, project_id, owner, name, default_branch, access_token
        FROM repos WHERE project_id = $1 ORDER BY created_at LIMIT 1`,
     [projectId],
   );
+  return row ? { ...row, access_token: decrypt(row.access_token) } : null;
 }
 
 // --- tasks -----------------------------------------------------------------
@@ -200,6 +202,9 @@ async function runInvestigations(job: Job): Promise<void> {
   }
 
   const limit = Number(job.payload.limit ?? 3);
+  // A key passed for this run only, rather than stored on the project.
+  const suppliedKey =
+    typeof job.payload.apiKey === "string" ? decrypt(job.payload.apiKey) : null;
   let done = 0;
 
   for (const symptom of symptoms.slice(0, limit)) {
@@ -214,7 +219,7 @@ async function runInvestigations(job: Job): Promise<void> {
     );
     if (existing) continue;
 
-    const result = await investigate(job.project_id, symptom);
+    const result = await investigate(job.project_id, symptom, suppliedKey);
     done += 1;
     console.log(
       `investigate: ${result.symptom} -> ${result.status}` +
@@ -243,6 +248,7 @@ async function importPostHog(job: Job): Promise<void> {
   const config = (
     typeof source.config === "string" ? JSON.parse(source.config) : source.config
   ) as PostHogConfig;
+  config.apiKey = decrypt(config.apiKey) ?? "";
 
   try {
     const summary = await importFromPostHog(job.project_id, config, {

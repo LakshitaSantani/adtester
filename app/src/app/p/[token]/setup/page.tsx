@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { resolveProject } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { getSecret, maskKey } from "@/lib/secrets";
 import { ensureWorker } from "@/lib/worker";
@@ -17,10 +18,7 @@ export default async function SetupPage({
   ensureWorker();
   const db = await getDb();
 
-  const project = await db.one<{ id: string; name: string; install_key: string }>(
-    `SELECT id, name, install_key FROM projects WHERE view_token = $1`,
-    [token],
-  );
+  const project = await resolveProject(token, "admin");
   if (!project) notFound();
 
   const posthog = await db.one<{ config: Record<string, unknown> | string }>(
@@ -49,6 +47,12 @@ export default async function SetupPage({
   );
 
   const anthropic = await getSecret(project.id, "anthropic");
+
+  // The read-only link, so the results can be shared without the keys.
+  const links = await db.one<{ view_token: string }>(
+    `SELECT view_token FROM projects WHERE id = $1`,
+    [project.id],
+  );
   const origin = process.env.PUBLIC_ORIGIN ?? "http://localhost:3000";
 
   const state: SetupState = {
@@ -67,7 +71,7 @@ export default async function SetupPage({
       titles: documents.map((d) => d.title ?? "Untitled").slice(0, 6),
     },
     sessions: counts?.sessions ?? 0,
-    installSnippet: `<script src="${origin}/rec.js"\n        data-swy-key="${project.install_key}"\n        data-swy-release="YOUR_GIT_SHA" async></script>`,
+    installSnippet: `<script src="${origin}/rec.js"\n        data-swy-key="${project.installKey}"\n        data-swy-release="YOUR_GIT_SHA" async></script>`,
   };
 
   return (
@@ -91,6 +95,37 @@ export default async function SetupPage({
       </p>
 
       <SetupForm token={token} state={state} />
+
+      <h2>Two links</h2>
+      <p className="lede small">
+        Sharing what the product found shouldn&apos;t hand over the keys that paid for it.
+      </p>
+      <div className="tablecard">
+        <table>
+          <tbody>
+            <tr>
+              <th style={{ width: 130 }}>Share this</th>
+              <td>
+                <div className="mono small">{`${origin}/p/${links?.view_token ?? ""}`}</div>
+                <div className="small muted">
+                  Read the reports, the sessions and the replays. Cannot change settings,
+                  cannot start work, cannot spend anything.
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <th>Keep this</th>
+              <td>
+                <div className="mono small">{`${origin}/p/${token}`}</div>
+                <div className="small muted">
+                  Everything above, plus credentials and running the analysis. Anyone with
+                  it can spend your Anthropic budget.
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveProject } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { retrieveCandidates } from "@/lib/intent";
 import { resolveAnthropicKey } from "@/lib/secrets";
@@ -28,10 +29,7 @@ export async function POST(request: Request) {
   }
 
   const db = await getDb();
-  const project = await db.one<{ id: string }>(
-    `SELECT id FROM projects WHERE view_token = $1`,
-    [token],
-  );
+  const project = await resolveProject(token, "admin");
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const commit = await db.one<{

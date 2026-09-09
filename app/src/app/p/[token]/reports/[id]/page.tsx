@@ -60,7 +60,7 @@ export default async function ReportPage({
   }>(
     `SELECT i.* FROM investigations i
        JOIN projects p ON p.id = i.project_id
-      WHERE i.id = $1 AND p.view_token = $2`,
+      WHERE i.id = $1 AND (p.view_token = $2 OR p.admin_token = $2)`,
     [id, token],
   );
   if (!inv) notFound();
