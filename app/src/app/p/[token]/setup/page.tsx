@@ -4,6 +4,8 @@ import { resolveProject } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { getSecret, maskKey } from "@/lib/secrets";
 import { ensureWorker } from "@/lib/worker";
+import { draftProfile, loadProfile, rolloutWarning } from "@/lib/profile";
+import ProfileForm from "./Profile";
 import SetupForm, { type SetupState } from "./SetupForm";
 
 export const runtime = "nodejs";
@@ -47,6 +49,11 @@ export default async function SetupPage({
   );
 
   const anthropic = await getSecret(project.id, "anthropic");
+  const [profile, draft] = await Promise.all([
+    loadProfile(project.id),
+    draftProfile(project.id),
+  ]);
+  const rolloutNote = rolloutWarning(profile);
 
   // The read-only link, so the results can be shared without the keys.
   const links = await db.one<{ view_token: string }>(
@@ -95,6 +102,27 @@ export default async function SetupPage({
       </p>
 
       <SetupForm token={token} state={state} />
+
+      <section className={`setup-step ${profile?.confirmedAt ? "done" : ""}`}>
+        <div className="setup-head">
+          <span className="setup-n">{profile?.confirmedAt ? "✓" : "5"}</span>
+          <div>
+            <h2 style={{ margin: 0 }}>About the business</h2>
+            <div className="small muted">
+              {profile?.confirmedAt
+                ? `${profile.criticalPaths.length} pages marked as the ones that matter`
+                : "A few things we can't work out on our own"}
+            </div>
+          </div>
+        </div>
+        <ProfileForm token={token} draft={draft} existing={profile} />
+      </section>
+
+      {rolloutNote && (
+        <div className="note guard">
+          <b>Worth knowing now.</b> {rolloutNote}
+        </div>
+      )}
 
       <h2>Two links</h2>
       <p className="lede small">

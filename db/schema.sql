@@ -282,3 +282,31 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS signature_paths JSONB NOT NULL DEF
 -- app has no measurable rate on any page except the one people landed on,
 -- because everyone who did not break leaves no trace of having been there.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS paths TEXT[] NOT NULL DEFAULT '{}';
+
+-- ================================================================ context
+-- What the company is, so downstream judgement is possible at all.
+--
+-- Drafted from what's already connected -- the codebase says what the product
+-- does, PRDs say what it's for -- and then CONFIRMED by a person. Inference
+-- alone is confidently wrong in ways nobody sees; a blank form is tedious
+-- enough that it gets skipped. A draft someone corrects is neither.
+--
+-- `drafted` keeps what we guessed alongside what they said, so a wrong guess
+-- is visible rather than silently overwritten.
+CREATE TABLE IF NOT EXISTS company_profile (
+  project_id     TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  what_we_do     TEXT,
+  customers      TEXT,          -- b2b | b2c | both
+  revenue_model  TEXT,          -- subscription | transaction | ads | one_off | other
+  -- The journeys that actually matter. A problem on checkout outranks a
+  -- bigger one on /help, and without this they look identical.
+  critical_paths TEXT[] NOT NULL DEFAULT '{}',
+  -- Decides whether the counterfactual can ever be available, so it is worth
+  -- knowing before someone waits a week for a capped answer.
+  rollout        TEXT,          -- gradual | all_at_once | unsure
+  competitors    TEXT[] NOT NULL DEFAULT '{}',
+  seasonality    TEXT,
+  drafted        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  confirmed_at   TIMESTAMPTZ,
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);

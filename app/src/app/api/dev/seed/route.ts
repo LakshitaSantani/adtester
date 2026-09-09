@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -171,6 +171,13 @@ export async function POST(request: Request) {
     // homepage's code and find nothing.
     await make("a3f91c2", NEW_BUILD_AT, 20, 40, 22, "/checkout", "/");
     await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout", "/");
+  } else if (scenario === "priority") {
+    // A small problem where money changes hands, and a bigger one that costs
+    // nothing. Ranked by volume alone the help page wins, which is exactly the
+    // mistake a company profile exists to prevent.
+    await make("a3f91c2", NEW_BUILD_AT, 20, 40, 8, "/checkout");
+    await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout");
+    await make("a3f91c2", NEW_BUILD_AT, 20, 60, 34, "/help");
   } else if (scenario === "no-release") {
     // What imported PostHog data actually looks like: real sessions, no build
     // stamps anywhere. The investigator has to fall back to comparing the
@@ -199,6 +206,10 @@ export async function POST(request: Request) {
     "no-split":
       "Everyone is on the new build, so there is no control group. a3f91c2 should " +
       "still lead, but confidence must be capped at 0.70 and the report must say why.",
+    priority:
+      "8 people stuck in checkout against 34 annoyed by the help page. Without a " +
+      "profile the help page ranks first; with /checkout marked critical it should " +
+      "lead instead.",
     spa:
       "Every session entered at / and broke on /checkout, as a single-page app " +
       "behaves. Reasoning from the entry URL would examine the homepage and find " +
