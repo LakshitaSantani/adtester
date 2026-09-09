@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db";
+import Verdict from "./Verdict";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,6 +65,11 @@ export default async function ReportPage({
     [id, token],
   );
   if (!inv) notFound();
+
+  const verdict = await db.one<{ was_correct: boolean; note: string | null }>(
+    `SELECT was_correct, note FROM feedback WHERE investigation_id = $1`,
+    [id],
+  );
 
   const evidence = await db.query<EvidenceRow>(
     `SELECT id, kind, ref, quote, detail, contribution
@@ -262,6 +268,14 @@ export default async function ReportPage({
           </div>
         );
       })}
+
+      <Verdict
+        token={token}
+        investigationId={inv.id}
+        existing={
+          verdict ? { wasCorrect: verdict.was_correct, note: verdict.note } : null
+        }
+      />
 
       <div className="note">
         <b>How to read the numbers.</b> Everything except the comparison is circumstantial —

@@ -4,29 +4,78 @@ Session recording, and eventually the thing that makes it worth having: an
 explanation of *why* a number moved, with evidence from the code, the docs and
 the meetings that caused it.
 
-**Phases 1–4 are done and working.** Record a session, watch it back, connect a
-repository, and get a report saying which change caused a problem — with the
-evidence behind it, and an honest refusal when the evidence isn't there.
+It works out which code change caused a problem, shows the evidence, scores how
+sure it is, and refuses to answer when the evidence isn't there.
 
 ---
 
 ## Run it
 
+Needs Node 20 or newer. Nothing else — no database to install, no Docker.
+
 ```bash
+git clone <this repo>
+cd Simplyyyywhyyy
 npm install
 npm run build:recorder
-npm run dev
+cd app && npm run dev
 ```
 
-Open http://localhost:3000, create a project, and you get two things: a
-one-line snippet to paste into a site, and a private dashboard link.
+Open the URL it prints (usually http://localhost:3000), give the project a
+name, and you land on a setup page.
 
-There's a test page at `/demo.html` wired to trip every detector — put your
-install key in its script tag and click around.
+The database is PGlite — Postgres compiled to WebAssembly, stored in
+`app/data/pg`. Delete that folder to start over.
 
-No database to install. It uses PGlite (Postgres compiled to WASM) stored in
-`app/data/pg`. When you deploy, set `DATABASE_URL` to a real Postgres
-connection string — the SQL is identical, so there is no migration.
+### Try it without connecting anything
+
+```bash
+curl -X POST http://localhost:3000/api/dev/seed   -H 'Content-Type: application/json'   -d '{"token":"<your admin token>","scenario":"split"}'
+```
+
+That builds a worked example with a known correct answer: five commits, one of
+which really did cause the problem. Press **Look for problems now** on the
+reports page and it should name `a3f91c2` at about 0.89.
+
+Other scenarios: `no-release` (no build stamps, as imported data usually
+looks), `no-split` (everyone updated at once), `diffuse` (should refuse).
+
+### Connect your own data
+
+Four things on the setup page, two required:
+
+| | | |
+|---|---|---|
+| **Recordings** | PostHog host, project id, personal API key (`phx_`) | required |
+| **Code** | GitHub repo, plus a read-only token for private ones | required |
+| **Context** | PRDs and transcripts — `.md`, `.txt`, `.vtt`, `.srt` | optional |
+| **Analysis** | Anthropic API key | optional |
+
+Without the Anthropic key you still get findings, evidence and confidence
+scores. What you lose is the written explanation and the suggested patch.
+
+---
+
+## If you're testing this for us
+
+The question is **whether the analysis is correct**, not whether the app is
+pretty. Two things make your answer useful:
+
+**Judge each finding.** Every report has a *Was this right?* button. The note
+matters more than the yes or no — "right commit, wrong reason" is a completely
+different failure from "not even close", and they need different fixes.
+
+**Send back the results.** There's a *Download the results* link on the reports
+page. It contains the findings, the confidence scores, the signal breakdowns
+and your verdicts — and deliberately no credentials, no recordings and no text
+from your documents, so it's safe to pass on.
+
+The reports page also shows how often it was right at each confidence level.
+That table is the actual product claim; if it says 0.9 and is right half the
+time, the scoring is wrong and we need to know.
+
+**Two links.** The one starting `a_` configures things and can spend your
+Anthropic credit. The one starting `v_` only reads. Share the second one.
 
 ---
 
@@ -47,6 +96,13 @@ app/                   Next.js — ingest, dashboard and player in one process
   src/lib/github.ts    commits, diffs, PRs, deployments
   src/lib/lexicon.ts   routes, aliases, the import graph
   src/lib/candidates.ts  session -> the commits that could have affected it
+  src/lib/posthog.ts     importing an existing PostHog account
+  src/lib/rrweb-signals.ts  reading signatures out of a raw event stream
+  src/lib/session-timeline.ts  a recording, as a description of what someone did
+  src/lib/intent.ts      linking a change to what the team said they'd build
+  src/lib/analyst.ts     reads the diff and the recording, writes the fix
+  src/lib/auth.ts        the view / admin split
+  src/lib/crypto.ts      credentials encrypted at rest
   src/lib/symptoms.ts    what started going wrong, and where
   src/lib/counterfactual.ts  the same symptom on builds with and without a change
   src/lib/confidence.ts  six named signals, and the cap

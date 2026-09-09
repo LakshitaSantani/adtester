@@ -436,3 +436,17 @@ table.signals td.neg { color: var(--warn); }
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin: 22px 0 8px;
 }
+
+/* ---------- verdict ---------- */
+
+.verdict {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--guard);
+  padding: 18px 22px;
+  margin: 26px 0;
+}
+.verdict-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+.verdict p { margin: 6px 0 12px; }
+.pill.verdict-yes { color: var(--good); border-color: var(--good); }
+.pill.verdict-no { color: var(--warn); border-color: var(--warn); }

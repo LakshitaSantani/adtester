@@ -56,6 +56,27 @@ export default async function ReportsPage({
     [project.id],
   );
 
+  // How often a claim at a given confidence turned out to be right. The
+  // whole argument for the product rests on this being honest, and it can
+  // only be answered after somebody has judged a few.
+  const scored = await db.query<{ confidence: number; was_correct: boolean }>(
+    `SELECT i.confidence, f.was_correct
+       FROM investigations i
+       JOIN feedback f ON f.investigation_id = i.id
+      WHERE i.project_id = $1 AND i.confidence IS NOT NULL`,
+    [project.id],
+  );
+
+  const bands = [
+    { label: "0.80 and up", min: 0.8, max: 1.01 },
+    { label: "0.60 – 0.79", min: 0.6, max: 0.8 },
+    { label: "below 0.60", min: 0, max: 0.6 },
+  ].map((b) => {
+    const rows = scored.filter((s) => s.confidence >= b.min && s.confidence < b.max);
+    const right = rows.filter((s) => s.was_correct).length;
+    return { ...b, total: rows.length, right };
+  });
+
   const claimed = investigations.filter((i) => i.status === "claimed");
   const declined = investigations.filter((i) => i.status === "declined");
 
@@ -80,6 +101,54 @@ export default async function ReportsPage({
       </p>
 
       <RunInvestigation token={token} />
+
+      {scored.length > 0 && (
+        <>
+          <h2>How often it&apos;s right</h2>
+          <p className="lede small">
+            Every claim below was scored before anyone knew the answer. {scored.length} have
+            been judged so far.
+          </p>
+          <div className="tablecard" style={{ marginBottom: 18 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Confidence said</th>
+                  <th className="right">Judged</th>
+                  <th className="right">Right</th>
+                  <th className="right">Hit rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bands.map((b) => (
+                  <tr key={b.label}>
+                    <td className="mono small">{b.label}</td>
+                    <td className="right mono small">{b.total}</td>
+                    <td className="right mono small">{b.right}</td>
+                    <td className="right mono small">
+                      {b.total === 0 ? (
+                        <span className="muted">—</span>
+                      ) : (
+                        `${Math.round((b.right / b.total) * 100)}%`
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {investigations.length > 0 && (
+        <p className="small muted" style={{ marginBottom: 18 }}>
+          <a href={`/api/export?t=${token}`} download>
+            Download the results
+          </a>{" "}
+          — findings, scores and verdicts as JSON. No credentials, no recordings, no
+          document text, so it is safe to send on.
+        </p>
+      )}
 
       {investigations.length === 0 ? (
         <div className="card empty">
