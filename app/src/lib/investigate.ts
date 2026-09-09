@@ -115,7 +115,7 @@ export async function investigate(
     return decline("no_candidates", "No affected sessions to work from.");
   }
 
-  const narrowed = await candidatesForSession(probeSessionId);
+  const narrowed = await candidatesForSession(probeSessionId, { path: symptom.path });
   if (!narrowed || narrowed.candidates.length === 0) {
     // Two very different failures used to share one label. "Nothing shipped
     // that touches this page" means there is nothing to do. "We couldn't

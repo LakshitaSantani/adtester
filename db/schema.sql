@@ -264,3 +264,21 @@ ALTER TABLE chunks ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0;
 -- resolveProject, which treats a missing admin token as "the view token still
 -- has its old powers".
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS admin_token TEXT UNIQUE;
+
+-- Which page each signature actually fired on.
+--
+-- `signatures` says WHAT went wrong; this says WHERE. In a single-page app the
+-- entry URL is usually not the page that broke -- somebody lands on the
+-- homepage and clicks through to checkout -- so reasoning from entry_url makes
+-- the whole pipeline examine the wrong page's code.
+--
+-- Shape: {"field_retry": ["/checkout"], "rage_click": ["/cart", "/search"]}
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS signature_paths JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- Every page a session visited.
+--
+-- signature_paths gives the numerator for a rate (who broke, and where). This
+-- gives the denominator (who was on the page at all). Without it a single-page
+-- app has no measurable rate on any page except the one people landed on,
+-- because everyone who did not break leaves no trace of having been there.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS paths TEXT[] NOT NULL DEFAULT '{}';

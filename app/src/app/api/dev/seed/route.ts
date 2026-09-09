@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse" | "no-release";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -122,23 +122,34 @@ export async function POST(request: Request) {
     count: number,
     affected: number,
     path: string,
+    /**
+     * Where the session STARTED, when that differs from where it broke.
+     * A single-page app lands people on the homepage and they click through,
+     * so this is the normal case rather than an edge one.
+     */
+    entryPath?: string,
   ) => {
     for (let i = 0; i < count; i++) {
       const offset = (i / Math.max(1, count)) * spreadHours;
       await db.query(
         `INSERT INTO sessions
            (id, project_id, release, started_at, last_event_at, entry_url,
-            user_agent, event_count, signatures, error_count)
-         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,0)`,
+            user_agent, event_count, signatures, error_count, signature_paths, paths)
+         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,0,$9::jsonb,$10::text[])`,
         [
           newSessionId(),
           pid,
           release,
           at(startHoursAgo - offset),
-          `https://shop.example.com${path}`,
+          `https://shop.example.com${entryPath ?? path}`,
           "Mozilla/5.0 (Macintosh) Chrome/140",
           120 + i,
           i < affected ? ["field_retry"] : [],
+          // Where the signature actually fired, which is the point.
+          i < affected ? JSON.stringify({ field_retry: [path] }) : "{}",
+          // Everyone visited the page, whether or not it broke for them —
+          // that is the denominator the rate is measured against.
+          entryPath && entryPath !== path ? [entryPath, path] : [path],
         ],
       );
     }
@@ -154,6 +165,12 @@ export async function POST(request: Request) {
     for (const path of ["/checkout", "/account", "/search", "/cart", "/help"]) {
       await make("a3f91c2", NEW_BUILD_AT, 20, 12, 7, path);
     }
+  } else if (scenario === "spa") {
+    // Every session enters at "/" and the failure happens on /checkout after
+    // the user clicks through. Reasoning from the entry URL would look at the
+    // homepage's code and find nothing.
+    await make("a3f91c2", NEW_BUILD_AT, 20, 40, 22, "/checkout", "/");
+    await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout", "/");
   } else if (scenario === "no-release") {
     // What imported PostHog data actually looks like: real sessions, no build
     // stamps anywhere. The investigator has to fall back to comparing the
@@ -182,6 +199,10 @@ export async function POST(request: Request) {
     "no-split":
       "Everyone is on the new build, so there is no control group. a3f91c2 should " +
       "still lead, but confidence must be capped at 0.70 and the report must say why.",
+    spa:
+      "Every session entered at / and broke on /checkout, as a single-page app " +
+      "behaves. Reasoning from the entry URL would examine the homepage and find " +
+      "nothing; it should still name a3f91c2.",
     diffuse:
       "The signature is on five different pages. The investigator should decline " +
       "rather than blame a commit behind any one of them.",

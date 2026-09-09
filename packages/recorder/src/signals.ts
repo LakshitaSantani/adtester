@@ -13,6 +13,23 @@
 import { CustomEventType, type SignatureName } from "./types";
 
 type Emit = (type: CustomEventType, payload: Record<string, unknown>) => void;
+
+/**
+ * The page a signal fired on.
+ *
+ * In a single-page app the URL a session STARTED at is usually not the page
+ * where anything went wrong — somebody lands on the homepage and clicks
+ * through to checkout. Without stamping each signal with the path at the
+ * moment it happened, everything downstream reasons about the wrong page's
+ * code.
+ */
+const currentPath = (): string => {
+  try {
+    return location.pathname || "/";
+  } catch {
+    return "/";
+  }
+};
 type Teardown = () => void;
 
 /** How close together clicks must be to count as rage. */
@@ -63,6 +80,7 @@ function rageClicks(emit: Emit): Teardown {
 
     if (clustered) {
       emit(CustomEventType.RageClick, {
+        path: currentPath(),
         count: recent.length,
         target: describe(e.target as Element),
         x: Math.round(e.clientX),
@@ -115,7 +133,7 @@ function deadClicks(emit: Emit): Teardown {
     const url = location.href;
     const timer = window.setTimeout(() => {
       if (!mutated && location.href === url) {
-        emit(CustomEventType.DeadClick, { target: describe(target) });
+        emit(CustomEventType.DeadClick, { path: currentPath(), target: describe(target) });
       }
       pending = null;
     }, DEAD_CLICK_WAIT_MS);
@@ -161,6 +179,7 @@ function fieldRetries(emit: Emit): Teardown {
     if (times.length >= FIELD_RETRY_COUNT) {
       reported.add(id);
       emit(CustomEventType.FieldRetry, {
+        path: currentPath(),
         field: id,
         attempts: times.length,
         // The type tells the server which validation to look at, without
@@ -182,6 +201,7 @@ function fieldRetries(emit: Emit): Teardown {
 function jsErrors(emit: Emit): Teardown {
   const onError = (e: ErrorEvent) => {
     emit(CustomEventType.JsError, {
+      path: currentPath(),
       message: String(e.message ?? "").slice(0, 500),
       source: e.filename ?? null,
       line: e.lineno ?? null,
@@ -193,6 +213,7 @@ function jsErrors(emit: Emit): Teardown {
   const onRejection = (e: PromiseRejectionEvent) => {
     const reason = e.reason;
     emit(CustomEventType.JsError, {
+      path: currentPath(),
       message: String(reason?.message ?? reason ?? "").slice(0, 500),
       source: null,
       line: null,
@@ -223,6 +244,7 @@ function networkErrors(emit: Emit, sanitizeUrl: (u: string) => string): Teardown
       const response = await originalFetch.apply(this, args);
       if (!response.ok) {
         emit(CustomEventType.NetworkError, {
+          path: currentPath(),
           url: sanitizeUrl(String(args[0])),
           status: response.status,
           durationMs: Date.now() - started,
@@ -231,6 +253,7 @@ function networkErrors(emit: Emit, sanitizeUrl: (u: string) => string): Teardown
       return response;
     } catch (error) {
       emit(CustomEventType.NetworkError, {
+        path: currentPath(),
         url: sanitizeUrl(String(args[0])),
         status: 0,
         durationMs: Date.now() - started,
@@ -265,6 +288,7 @@ function networkErrors(emit: Emit, sanitizeUrl: (u: string) => string): Teardown
       this.addEventListener("loadend", () => {
         if (this.status === 0 || this.status >= 400) {
           emit(CustomEventType.NetworkError, {
+            path: currentPath(),
             url: sanitizeUrl(this.__swyUrl ?? ""),
             status: this.status,
             durationMs: Date.now() - started,

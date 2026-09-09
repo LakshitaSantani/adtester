@@ -39,7 +39,7 @@ type Batch = {
 
 type RrwebEvent = {
   type?: number;
-  data?: { tag?: string; payload?: { type?: number } };
+  data?: { tag?: string; payload?: { type?: number; path?: string; url?: string } };
 };
 
 async function readBody(request: Request): Promise<string> {
@@ -77,16 +77,45 @@ export async function POST(request: Request) {
   // Find which signatures fired in this batch, so the session list can be
   // filtered without ever reading the event files back.
   const found = new Set<string>();
+  // Where each signature fired. In a single-page app this is rarely the page
+  // the session started on, and reasoning from the entry URL would send the
+  // whole pipeline looking at the wrong page's code.
+  const paths: Record<string, string[]> = {};
+  // Every page the session was on. This is the denominator when working out
+  // a rate — "12 of 40 people on /checkout hit this" needs to know about the
+  // 28 who didn't, and they leave no signature behind.
+  const visited = new Set<string>();
   let errors = 0;
+
   for (const event of batch.events as RrwebEvent[]) {
     if (event?.type !== RRWEB_CUSTOM) continue;
     if (event.data?.tag !== CUSTOM_TAG) continue;
-    const kind = event.data.payload?.type;
+    const payload = event.data.payload;
+    const kind = payload?.type;
     if (typeof kind !== "number") continue;
+
+    // A URL change (type 1) is how we learn a page was visited at all.
+    if (kind === 1 && typeof payload?.url === "string") {
+      try {
+        visited.add(new URL(payload.url).pathname || "/");
+      } catch {
+        /* a malformed URL costs one page, not the batch */
+      }
+      continue;
+    }
+
     const signature = SIGNATURES[kind];
-    if (signature) {
-      found.add(signature);
-      if (signature === "js_error") errors += 1;
+    if (!signature) continue;
+
+    found.add(signature);
+    if (signature === "js_error") errors += 1;
+
+    const path = typeof payload?.path === "string" ? payload.path : null;
+    if (path) {
+      visited.add(path);
+      const list = paths[signature] ?? [];
+      if (!list.includes(path)) list.push(path);
+      paths[signature] = list;
     }
   }
 
@@ -107,6 +136,21 @@ export async function POST(request: Request) {
         byte_count    = byte_count + $3,
         error_count   = error_count + $4,
         signatures    = ARRAY(SELECT DISTINCT unnest(signatures || $5::text[])),
+        paths         = ARRAY(SELECT DISTINCT unnest(paths || $9::text[])),
+        -- Merge rather than replace: a later batch can add a page an earlier
+        -- one didn't see, and losing that would undo the whole point.
+        signature_paths = (
+          SELECT COALESCE(jsonb_object_agg(k, v), '{}'::jsonb)
+            FROM (
+              SELECT k, to_jsonb(ARRAY(SELECT DISTINCT unnest(
+                       ARRAY(SELECT jsonb_array_elements_text(COALESCE(sessions.signature_paths -> k, '[]'::jsonb)))
+                       || ARRAY(SELECT jsonb_array_elements_text(COALESCE($8::jsonb -> k, '[]'::jsonb)))
+                     ))) AS v
+                FROM (
+                  SELECT jsonb_object_keys(sessions.signature_paths || $8::jsonb) AS k
+                ) keys
+            ) merged
+        ),
         closed_at     = COALESCE(closed_at, $6::timestamptz),
         close_reason  = COALESCE(close_reason, $7)
       WHERE id = $1`,
@@ -118,6 +162,8 @@ export async function POST(request: Request) {
       Array.from(found),
       batch.closed ? new Date().toISOString() : null,
       batch.closed ? (batch.closeReason ?? "closed") : null,
+      JSON.stringify(paths),
+      Array.from(visited),
     ],
   );
 

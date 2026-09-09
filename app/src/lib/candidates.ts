@@ -98,7 +98,10 @@ async function reachableFrom(
 
 export async function candidatesForSession(
   sessionId: string,
-  { windowDays = DEFAULT_WINDOW_DAYS }: { windowDays?: number } = {},
+  {
+    windowDays = DEFAULT_WINDOW_DAYS,
+    path: explicitPath,
+  }: { windowDays?: number; path?: string | null } = {},
 ): Promise<CandidateResult | null> {
   const db = await getDb();
 
@@ -114,7 +117,11 @@ export async function candidatesForSession(
   );
   if (!session) return null;
 
-  const path = pathOf(session.entry_url);
+  // The page the problem happened on, when the caller knows it. Falling back
+  // to the entry URL is only right for a multi-page site: in a single-page app
+  // somebody lands on the homepage and clicks through, so the entry URL sends
+  // this looking at code the failure never touched.
+  const path = explicitPath ?? pathOf(session.entry_url);
 
   const base: CandidateResult = {
     sessionId,

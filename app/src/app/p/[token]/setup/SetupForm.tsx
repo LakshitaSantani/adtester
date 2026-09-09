@@ -36,6 +36,7 @@ export default function SetupForm({
   const [busy, setBusy] = useState<string | null>(null);
   const [errors, setErrors] = useState<Errors>({});
   const [uploaded, setUploaded] = useState<string[]>([]);
+  const [demoNote, setDemoNote] = useState<string | null>(null);
 
   async function save(run: boolean) {
     setBusy(run ? "running" : "saving");
@@ -87,6 +88,27 @@ export default function SetupForm({
       router.refresh();
     } catch {
       setErrors({ documents: "Upload failed." });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function loadDemo() {
+    setBusy("demo");
+    try {
+      const response = await fetch("/api/dev/demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const data = (await response.json()) as { investigations?: number; error?: string };
+      if (data.error) {
+        setDemoNote(data.error);
+        return;
+      }
+      window.location.href = `/p/${token}/reports`;
+    } catch {
+      setDemoNote("Could not load the demo data.");
     } finally {
       setBusy(null);
     }
@@ -291,6 +313,20 @@ export default function SetupForm({
       </div>
 
       {errors.general && <div className="note warn">{errors.general}</div>}
+
+      <div className="note">
+        <b>Just want to see what it looks like?</b> This fills the dashboard with a
+        made-up week — findings at three confidence levels, all three kinds of refusal, a
+        suggested patch, and quotes from a PRD and a standup. Nothing here is worked out by
+        the product; it is written by hand so the interface can be judged without connecting
+        anything.
+        <div style={{ marginTop: 12 }}>
+          <button className="ghost" onClick={() => void loadDemo()} disabled={busy !== null}>
+            {busy === "demo" ? "Loading…" : "Load demo data"}
+          </button>
+          {demoNote && <span className="small muted" style={{ marginLeft: 10 }}>{demoNote}</span>}
+        </div>
+      </div>
 
       <div className="note guard">
         <b>About the keys you just pasted.</b> They are stored in this

@@ -73,7 +73,29 @@ export type Counterfactual =
       detail: string;
     };
 
-const PATH_SQL = `split_part(split_part(regexp_replace(entry_url, '^https?://[^/]+', ''), '?', 1), '#', 1)`;
+/**
+ * Was this session on the page in question?
+ *
+ * Checks the pages it actually visited, falling back to the entry URL for
+ * sessions recorded before that was tracked. Using the entry URL alone breaks
+ * every single-page app: people land on the homepage and click through, so
+ * nobody looks like they were ever on /checkout and there is nothing left to
+ * compare.
+ */
+const ON_PAGE = `(
+  $4::text IS NULL
+  OR $4 = ANY(s.paths)
+  OR (s.paths = '{}' AND split_part(split_part(regexp_replace(s.entry_url, '^https?://[^/]+', ''), '?', 1), '#', 1) = $4)
+)`;
+
+/** Did the signature fire on that page, rather than merely somewhere? */
+const BROKE_HERE = `(
+  CASE WHEN s.signature_paths <> '{}'::jsonb
+       THEN COALESCE(s.signature_paths -> $3, '[]'::jsonb) ? COALESCE($4, '')
+        OR ($4::text IS NULL AND $3 = ANY(s.signatures))
+       ELSE $3 = ANY(s.signatures)
+  END
+)`;
 
 /**
  * Does a build contain a given commit?
@@ -151,14 +173,14 @@ async function tryVersionSplit(
      )
      SELECT s.release,
             COUNT(*)::int AS sessions,
-            COUNT(*) FILTER (WHERE $3 = ANY(s.signatures))::int AS affected,
+            COUNT(*) FILTER (WHERE ${BROKE_HERE})::int AS affected,
             MIN(o.first_seen)::text AS first_seen
        FROM sessions s
        JOIN release_origin o ON o.release = s.release
       WHERE s.project_id = $1
         AND s.started_at >= $2::timestamptz
         AND s.release IS NOT NULL AND s.release <> ''
-        AND ($4::text IS NULL OR ${PATH_SQL} = $4)
+        AND ${ON_PAGE}
       GROUP BY s.release`,
     [projectId, windowStart, signature, path],
   );
@@ -225,17 +247,17 @@ async function tryTemporal(
     after_affected: number;
   }>(
     `SELECT
-       COUNT(*) FILTER (WHERE started_at <  $2::timestamptz)::int AS before_sessions,
-       COUNT(*) FILTER (WHERE started_at <  $2::timestamptz
-                          AND $3 = ANY(signatures))::int AS before_affected,
-       COUNT(*) FILTER (WHERE started_at >= $2::timestamptz)::int AS after_sessions,
-       COUNT(*) FILTER (WHERE started_at >= $2::timestamptz
-                          AND $3 = ANY(signatures))::int AS after_affected
-       FROM sessions
-      WHERE project_id = $1
-        AND started_at >= $2::timestamptz - ($5 || ' hours')::interval
-        AND started_at <= $2::timestamptz + ($5 || ' hours')::interval
-        AND ($4::text IS NULL OR ${PATH_SQL} = $4)`,
+       COUNT(*) FILTER (WHERE s.started_at <  $2::timestamptz)::int AS before_sessions,
+       COUNT(*) FILTER (WHERE s.started_at <  $2::timestamptz
+                          AND ${BROKE_HERE})::int AS before_affected,
+       COUNT(*) FILTER (WHERE s.started_at >= $2::timestamptz)::int AS after_sessions,
+       COUNT(*) FILTER (WHERE s.started_at >= $2::timestamptz
+                          AND ${BROKE_HERE})::int AS after_affected
+       FROM sessions s
+      WHERE s.project_id = $1
+        AND s.started_at >= $2::timestamptz - ($5 || ' hours')::interval
+        AND s.started_at <= $2::timestamptz + ($5 || ' hours')::interval
+        AND ${ON_PAGE}`,
     [projectId, deployedAt, signature, path, String(TEMPORAL_WINDOW_HOURS)],
   );
 
