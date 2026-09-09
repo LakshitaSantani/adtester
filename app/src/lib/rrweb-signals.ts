@@ -69,10 +69,42 @@ export type ExtractedSignals = {
   errorCount: number;
   /** Every URL the session visited, in order, from Meta events. */
   urls: string[];
+  /**
+   * Where each signature actually fired.
+   *
+   * Without this an imported session could only say "something went wrong
+   * somewhere in here", and detection fell back to the entry URL. In a
+   * single-page app that is nearly always the wrong page: someone lands on
+   * "/", clicks through to "/checkout/step-3" and hits the bug there, and the
+   * whole finding gets filed against the homepage — where the investigator
+   * then looks for a cause among code that had nothing to do with it.
+   */
+  signaturePaths: Record<string, string[]>;
+  /** Every distinct page the session was on. The denominator for rates. */
+  paths: string[];
+  /**
+   * Endpoints whose requests failed.
+   *
+   * The only thread from a session back to server-side code: a page reaches
+   * its own files through imports, but a backend handler is only ever reached
+   * over the network. Empty here meant backend candidate matching was dead on
+   * imported data.
+   */
+  apiPaths: string[];
   startedAt: number | null;
   endedAt: number | null;
   eventCount: number;
 };
+
+/** Origin, query and hash stripped — what the lexicon's routes are matched against. */
+export function pathFromHref(href: string): string | null {
+  try {
+    const url = new URL(href, "http://x");
+    return url.pathname || "/";
+  } catch {
+    return null;
+  }
+}
 
 // Thresholds kept in step with the browser-side detectors in
 // packages/recorder/src/signals.ts. If one moves, move both — otherwise an
@@ -110,6 +142,32 @@ export function extractSignals(events: RrwebEvent[]): ExtractedSignals {
   let errorCount = 0;
   const urls: string[] = [];
 
+  // Where the session was, over time. Meta events mark every navigation,
+  // including the client-side ones a single-page app makes without a reload.
+  const navigations: Array<{ t: number; path: string }> = [];
+  const signaturePaths = new Map<string, Set<string>>();
+  const apiPaths = new Set<string>();
+
+  /** The page the session was on at a given moment. */
+  const pathAt = (t: number): string | null => {
+    let current: string | null = navigations[0]?.path ?? null;
+    for (const nav of navigations) {
+      if (nav.t > t) break;
+      current = nav.path;
+    }
+    return current;
+  };
+
+  /** Record a signature, and the page it happened on. */
+  const note = (signature: string, t: number) => {
+    signatures.add(signature);
+    const path = pathAt(t);
+    if (!path) return;
+    const set = signaturePaths.get(signature) ?? new Set<string>();
+    set.add(path);
+    signaturePaths.set(signature, set);
+  };
+
   // Sorting matters: the dead-click and field-retry rules both reason about
   // what happened *after* something, and PostHog blobs arrive per window and
   // can interleave out of order.
@@ -123,6 +181,10 @@ export function extractSignals(events: RrwebEvent[]): ExtractedSignals {
     if (event.type === EventType.Meta && typeof event.data?.href === "string") {
       const href = event.data.href;
       if (urls[urls.length - 1] !== href) urls.push(href);
+      const path = pathFromHref(href);
+      if (path && navigations[navigations.length - 1]?.path !== path) {
+        navigations.push({ t: event.timestamp, path });
+      }
       continue;
     }
 
@@ -133,12 +195,21 @@ export function extractSignals(events: RrwebEvent[]): ExtractedSignals {
       const kind = String(payload?.type ?? payload?.level ?? tag);
 
       if (/error|exception/i.test(kind) || /error|exception/i.test(tag)) {
-        signatures.add("js_error");
+        note("js_error", event.timestamp);
         errorCount += 1;
       }
       if (/network|fetch|xhr/i.test(tag)) {
         const status = Number(payload?.status ?? 200);
-        if (status === 0 || status >= 400) signatures.add("network_error");
+        if (status === 0 || status >= 400) {
+          note("network_error", event.timestamp);
+          // Only failed requests are recorded. A backend change that made
+          // responses slower or subtly wrong leaves no trace this way, and
+          // that limitation is real.
+          if (typeof payload?.url === "string") {
+            const endpoint = pathFromHref(payload.url);
+            if (endpoint && endpoint !== "/") apiPaths.add(endpoint);
+          }
+        }
       }
       continue;
     }
@@ -180,10 +251,7 @@ export function extractSignals(events: RrwebEvent[]): ExtractedSignals {
         Math.abs(c.x - first.x) < RAGE_RADIUS_PX &&
         Math.abs(c.y - first.y) < RAGE_RADIUS_PX,
     );
-    if (clustered) {
-      signatures.add("rage_click");
-      break;
-    }
+    if (clustered) note("rage_click", first.t);
   }
 
   // Dead: a click with no DOM change in the following moment. Only counted
@@ -195,10 +263,7 @@ export function extractSignals(events: RrwebEvent[]): ExtractedSignals {
       const changed = mutationTimes.some(
         (t) => t > click.t && t - click.t <= DEAD_CLICK_WAIT_MS,
       );
-      if (!changed) {
-        signatures.add("dead_click");
-        break;
-      }
+      if (!changed) note("dead_click", click.t);
     }
   }
 
@@ -212,8 +277,7 @@ export function extractSignals(events: RrwebEvent[]): ExtractedSignals {
     }
     const span = times[times.length - 1] - times[0];
     if (bursts >= FIELD_RETRY_COUNT && span <= FIELD_RETRY_WINDOW_MS) {
-      signatures.add("field_retry");
-      break;
+      note("field_retry", times[0]);
     }
   }
 
@@ -221,6 +285,11 @@ export function extractSignals(events: RrwebEvent[]): ExtractedSignals {
     signatures: [...signatures],
     errorCount,
     urls,
+    signaturePaths: Object.fromEntries(
+      [...signaturePaths].map(([signature, paths]) => [signature, [...paths]]),
+    ),
+    paths: [...new Set(navigations.map((n) => n.path))],
+    apiPaths: [...apiPaths],
     startedAt: ordered[0]?.timestamp ?? null,
     endedAt: ordered[ordered.length - 1]?.timestamp ?? null,
     eventCount: ordered.length,

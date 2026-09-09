@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend" | "fix-commit" | "traffic-shift";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -217,6 +217,32 @@ export async function POST(request: Request) {
       signature: "network_error",
       apiPath: "/api/checkout/validate",
     });
+  } else if (scenario === "fix-commit") {
+    // A commit that REPAIRED the symptom, while the symptom itself is real
+    // and rising because the old build is still serving most of the traffic.
+    //
+    // The counterfactual is decisively negative — 2% of sessions on the build
+    // carrying the change hit this, against 35% of those without it — and
+    // every other signal points the usual way: the commit touches validation,
+    // which /checkout reaches, and it shipped just before the symptom became
+    // visible. A scorer that treats "argues against" as "says nothing" adds
+    // those up to 0.48 and names the fix as the cause of the bug.
+    await db.query(`DELETE FROM commits WHERE project_id = $1 AND sha = 'b7d2e10'`, [pid]);
+    await make("b7d2e10", NEW_BUILD_AT, 20, 40, 14, "/checkout");
+    await make("a3f91c2", NEW_BUILD_AT, 20, 40, 1, "/checkout");
+  } else if (scenario === "traffic-shift") {
+    // Checkout is completely unchanged — same traffic, same failure rate —
+    // while the homepage campaign that carried most of the site's visitors
+    // gets switched off.
+    //
+    // Nothing about checkout is different, so there is nothing to report. A
+    // rate divided by site-wide sessions disagrees: the denominator collapses
+    // by an order of magnitude, checkout's apparent rate multiplies, and the
+    // product invents a regression out of a marketing decision.
+    await make("a3f91c2", OLD_BUILD_AT, 140, 600, 0, "/");
+    await make("a3f91c2", OLD_BUILD_AT, 140, 60, 6, "/checkout");
+    await make("a3f91c2", NEW_BUILD_AT, 20, 20, 0, "/");
+    await make("a3f91c2", NEW_BUILD_AT, 20, 40, 4, "/checkout");
   } else if (scenario === "priority") {
     // A small problem where money changes hands, and a bigger one that costs
     // nothing. Ranked by volume alone the help page wins, which is exactly the
@@ -260,6 +286,17 @@ export async function POST(request: Request) {
       "The failure is a rejected request to /api/checkout/validate and nothing in " +
       "the frontend changed. Before backend indexing this reported 'nothing " +
       "touched this page'; it should now name f5e21a9, a Python commit.",
+    "fix-commit":
+      "a3f91c2 FIXED this: 2% of sessions on builds carrying it hit the symptom " +
+      "against 35% of those without. Every other signal still points at it, so a " +
+      "scorer that clamps negative evidence to zero reaches 0.48 and names the " +
+      "repair as the cause. It should decline instead.",
+    "traffic-shift":
+      "Checkout is unchanged — 10% of its sessions failed last week and 10% failed " +
+      "today. Only the homepage campaign stopped, taking site-wide traffic with it. " +
+      "Measured against total site sessions checkout looks 7x worse and a phantom " +
+      "symptom appears; measured against sessions that reached checkout, there is " +
+      "nothing to report and the sweep should stay silent.",
     priority:
       "8 people stuck in checkout against 34 annoyed by the help page. Without a " +
       "profile the help page ranks first; with /checkout marked critical it should " +

@@ -37,6 +37,19 @@ const TIE_THRESHOLD = 0.1;
 /** Below this, nothing is worth asserting. */
 const MIN_CLAIM_CONFIDENCE = 0.35;
 
+/**
+ * How good a candidate's comparison was, as an ordering.
+ *
+ * Mirrors the confidence caps: a version split holds time constant and varies
+ * only the code, before/after holds the code path constant and lets
+ * everything else move, and nothing is nothing.
+ */
+const EVIDENCE_RANK = { version_split: 2, temporal: 1, none: 0 } as const;
+
+function evidenceRank(cf: Counterfactual): number {
+  return cf.available ? EVIDENCE_RANK[cf.mode] : EVIDENCE_RANK.none;
+}
+
 export type DeclineReason =
   | "diffuse"
   /** The page's code was never found, so nothing could be ruled in or out. */
@@ -139,9 +152,15 @@ export async function investigate(
     );
   }
 
-  // Score every survivor. The counterfactual runs per candidate because each
-  // one splits the population at a different moment.
-  const ranked: Investigation["ranked"] = [];
+  // Test every survivor before scoring any of them. The counterfactual runs
+  // per candidate because each one splits the population at a different
+  // moment — and the results are needed as a group, because how much a
+  // candidate is diluted depends on how many of the others survived testing.
+  const tested: Array<{
+    candidate: (typeof narrowed.candidates)[number];
+    counterfactual: Counterfactual;
+    onsetGapHours: number | null;
+  }> = [];
 
   for (const candidate of narrowed.candidates) {
     const counterfactual = await testCounterfactual(
@@ -157,13 +176,31 @@ export async function investigate(
       ? (new Date(symptom.startedAt).getTime() - new Date(deployedAt).getTime()) / 3_600_000
       : null;
 
+    tested.push({ candidate, counterfactual, onsetGapHours });
+  }
+
+  // A rival is a candidate the evidence could not clear: either no comparison
+  // was possible, or one was and the symptom was worse with the change. A
+  // commit measured at zero or negative separation has been ruled out, and
+  // should stop counting against everybody else.
+  const rivals = tested.filter(
+    (t) => !t.counterfactual.available || t.counterfactual.separation > 0,
+  );
+
+  const ranked: Investigation["ranked"] = [];
+
+  for (const { candidate, counterfactual, onsetGapHours } of tested) {
+    const isRival = rivals.some((r) => r.candidate.sha === candidate.sha);
+
     const scored = score({
       counterfactual,
       matchedFiles: candidate.matchedFiles.length,
       filesTouched: candidate.filesTouchedCount,
       onsetGapHours,
       affectedSessions: symptom.affectedSessions,
-      candidateCount: narrowed.candidates.length,
+      // Everyone else still in the running, plus this one — whether or not it
+      // was itself cleared, so a candidate is never diluted by itself.
+      rivalCount: rivals.length - (isRival ? 1 : 0) + 1,
       reachedVia: candidate.reachedVia,
       symptomIsRequestFailure: symptom.signature === "network_error",
     });
@@ -178,7 +215,21 @@ export async function investigate(
   // Refusal 2: if the top two can't be separated, rank them and claim
   // nothing. Two plausible suspects presented honestly is more useful than
   // one presented falsely.
-  if (runnerUp && best.scored.confidence - runnerUp.scored.confidence < TIE_THRESHOLD) {
+  //
+  // "Can't be separated" is about the evidence, not only the arithmetic. Two
+  // scores within 0.10 of each other mean very different things when one was
+  // earned from a direct comparison — some users on the new build, some on
+  // the old, at the same moment — and the other from no comparison at all.
+  // Treating those two numbers as interchangeable threw away the best
+  // evidence this system can collect and then refused to answer. So the tie
+  // rule applies only when neither candidate's comparison outranks the
+  // other's.
+  const tied =
+    runnerUp !== undefined &&
+    evidenceRank(best.counterfactual) <= evidenceRank(runnerUp.counterfactual) &&
+    best.scored.confidence - runnerUp.scored.confidence < TIE_THRESHOLD;
+
+  if (runnerUp && tied) {
     const note =
       `${ranked.length} changes fit equally well and the evidence doesn't separate them. ` +
       `The likeliest are ${best.candidate.sha.slice(0, 8)} and ` +

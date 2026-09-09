@@ -11,7 +11,13 @@
 import { getDb } from "./db";
 import { newSessionId } from "./ids";
 import * as ph from "./posthog";
-import { extractSignals, findRelease, normalizeEvent, type RrwebEvent } from "./rrweb-signals";
+import {
+  extractSignals,
+  findRelease,
+  normalizeEvent,
+  pathFromHref,
+  type RrwebEvent,
+} from "./rrweb-signals";
 import { appendEvents } from "./storage";
 
 export type ImportSummary = {
@@ -112,11 +118,21 @@ export async function importFromPostHog(
         recording.endTime ??
         (signals.endedAt ? new Date(signals.endedAt).toISOString() : recording.startTime);
 
+      // An imported session with no paths is indistinguishable from a
+      // single-page one that never navigated, so fall back to the entry URL
+      // rather than leaving the array empty — an empty array reads as "we
+      // know it visited nothing", which is never true.
+      const entryPath = entryUrl ? (pathFromHref(entryUrl) ?? null) : null;
+      const visitedPaths =
+        signals.paths.length > 0 ? signals.paths : entryPath ? [entryPath] : [];
+
       await db.query(
         `INSERT INTO sessions
            (id, project_id, source, external_id, release, started_at, last_event_at,
-            closed_at, close_reason, entry_url, event_count, signatures, error_count)
-         VALUES ($1,$2,'posthog',$3,$4,$5,$6,$6,'imported',$7,$8,$9,$10)`,
+            closed_at, close_reason, entry_url, event_count, signatures, error_count,
+            signature_paths, paths, api_paths)
+         VALUES ($1,$2,'posthog',$3,$4,$5,$6,$6,'imported',$7,$8,$9,$10,
+                 $11::jsonb,$12::text[],$13::text[])`,
         [
           sessionId,
           projectId,
@@ -130,6 +146,9 @@ export async function importFromPostHog(
           // PostHog counts console errors itself; prefer its number when we
           // found none, since it sees logs the snapshot stream may not carry.
           signals.errorCount || recording.consoleErrorCount,
+          JSON.stringify(signals.signaturePaths),
+          visitedPaths,
+          signals.apiPaths,
         ],
       );
 

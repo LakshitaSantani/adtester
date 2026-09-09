@@ -89,6 +89,38 @@ const SIGNATURE_PAIRS = `
 `;
 
 /**
+ * Which pages each session actually visited.
+ *
+ * This is the denominator, and getting it wrong is the difference between a
+ * rate and a coincidence. The obvious denominator — every session on the site
+ * — silently mixes in traffic that never came near the page:
+ *
+ *   Marketing pauses a homepage campaign. Site traffic falls from 10,000 to
+ *   2,000. Checkout traffic and checkout errors are both unchanged, but
+ *   checkout's "rate" quintuples and we report a regression that never
+ *   happened.
+ *
+ *   A blog post goes viral. Site traffic multiplies, a genuine checkout
+ *   failure is divided by ten, and we say nothing.
+ *
+ * Both are traffic-mix changes wearing a rate's clothing. Dividing by the
+ * sessions that reached the page removes the whole class.
+ *
+ * Same fallback as SIGNATURE_PAIRS: sessions recorded before paths were
+ * tracked, and imports that didn't carry them, contribute their entry URL.
+ */
+const PATH_VISITS = `
+  SELECT s.id, s.project_id, s.started_at, p AS path
+    FROM sessions s, unnest(s.paths) AS p
+   WHERE cardinality(s.paths) > 0
+  UNION ALL
+  SELECT s.id, s.project_id, s.started_at,
+         split_part(split_part(regexp_replace(s.entry_url, '^https?://[^/]+', ''), '?', 1), '#', 1) AS path
+    FROM sessions s
+   WHERE cardinality(s.paths) = 0
+`;
+
+/**
  * Look for signatures that are newly common.
  *
  * Rates are per-session rather than absolute counts, so a quiet Sunday
@@ -113,18 +145,35 @@ export async function detectSymptoms(projectId: string): Promise<Symptom[]> {
 
   if (recent.length === 0) return [];
 
-  const [totals] = await db.query<{ recent_total: number; baseline_total: number }>(
-    `SELECT
-       (SELECT COUNT(*)::int FROM sessions
-         WHERE project_id = $1 AND started_at >= now() - ($2 || ' hours')::interval
-       ) AS recent_total,
-       (SELECT COUNT(*)::int FROM sessions
-         WHERE project_id = $1
-           AND started_at <  now() - ($2 || ' hours')::interval
-           AND started_at >= now() - ($3 || ' hours')::interval
-       ) AS baseline_total`,
+  // Traffic to each page, in both windows, so every rate below is measured
+  // against the people who could have seen the problem.
+  const visits = await db.query<{
+    path: string | null;
+    recent_total: number;
+    baseline_total: number;
+  }>(
+    `WITH visits AS (${PATH_VISITS})
+     SELECT path,
+            COUNT(*) FILTER (
+              WHERE started_at >= now() - ($2 || ' hours')::interval
+            )::int AS recent_total,
+            COUNT(*) FILTER (
+              WHERE started_at <  now() - ($2 || ' hours')::interval
+                AND started_at >= now() - ($3 || ' hours')::interval
+            )::int AS baseline_total
+       FROM visits
+      WHERE project_id = $1
+        AND started_at >= now() - ($3 || ' hours')::interval
+      GROUP BY path`,
     [projectId, String(RECENT_HOURS), String(RECENT_HOURS + BASELINE_HOURS)],
   );
+
+  const recentVisits = new Map<string, number>();
+  const baselineVisits = new Map<string, number>();
+  for (const row of visits) {
+    recentVisits.set(row.path ?? "", row.recent_total);
+    baselineVisits.set(row.path ?? "", row.baseline_total);
+  }
 
   const baseline = await db.query<{ signature: string; path: string | null; affected: number }>(
     `WITH pairs AS (${SIGNATURE_PAIRS})
@@ -142,8 +191,6 @@ export async function detectSymptoms(projectId: string): Promise<Symptom[]> {
     baselineBy.set(`${row.signature} ${row.path ?? ""}`, row.affected);
   }
 
-  const recentTotal = Math.max(1, totals?.recent_total ?? 0);
-  const baselineTotal = totals?.baseline_total ?? 0;
 
   // How many distinct paths each signature touches, for the diffuse check.
   const pathsBySignature = new Map<string, Set<string>>();
@@ -161,9 +208,17 @@ export async function detectSymptoms(projectId: string): Promise<Symptom[]> {
     const key = `${row.signature} ${row.path ?? ""}`;
     const wasAffected = baselineBy.get(key) ?? 0;
 
+    // Never fewer than the sessions we already know hit this page: the
+    // fallback branches of the two CTEs can disagree on an old session, and a
+    // rate above 1 would be nonsense rather than an alarming finding.
+    const pathKey = row.path ?? "";
+    const recentTotal = Math.max(1, recentVisits.get(pathKey) ?? 0, row.affected);
+    const baselineTotal = Math.max(baselineVisits.get(pathKey) ?? 0, wasAffected);
+
     const recentRate = row.affected / recentTotal;
-    // With no baseline traffic at all we can't say anything started — treat
-    // the baseline rate as zero and let the ratio rule below decide.
+    // With no baseline traffic to this page at all we can't say anything
+    // started — treat the baseline rate as zero and let the ratio rule below
+    // decide.
     const baselineRate = baselineTotal > 0 ? wasAffected / baselineTotal : 0;
 
     const isNew = baselineRate === 0;

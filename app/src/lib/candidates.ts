@@ -19,6 +19,24 @@ import { routeMatches } from "./lexicon";
 const DEFAULT_WINDOW_DAYS = 7;
 
 /**
+ * How far back to look when a commit has no deploy time.
+ *
+ * Seven days is the right window for "when did this ship", and the wrong one
+ * for "when was this written". A team without release tagging in CI leaves
+ * deployed_at null and the query falls back to authored_at — so a commit
+ * written on a branch ten days ago, reviewed, merged and shipped yesterday
+ * falls outside a seven-day window and never becomes a candidate at all. The
+ * investigation then reports that nothing touching this page shipped
+ * recently, which is false, and which no reader can tell is false.
+ *
+ * Author dates are a poor proxy for deploy dates, so this buys coverage with
+ * precision: the pool gets wider and the counterfactual has to do more of the
+ * work. That is the right way round. A candidate that was never considered
+ * cannot be ruled out by any amount of later evidence.
+ */
+const UNDATED_WINDOW_DAYS = 30;
+
+/**
  * How many import hops out from the route file we consider "reachable".
  * Three covers page -> feature component -> shared helper, which is where
  * most real bugs live. Deeper and nearly every file in the repo becomes
@@ -163,9 +181,18 @@ export async function candidatesForSession(
        FROM commits
       WHERE project_id = $1
         AND COALESCE(deployed_at, authored_at) <= $2::timestamptz
-        AND COALESCE(deployed_at, authored_at) >= $2::timestamptz - ($3 || ' days')::interval
+        AND CASE
+              WHEN deployed_at IS NOT NULL
+                THEN deployed_at >= $2::timestamptz - ($3 || ' days')::interval
+              ELSE authored_at >= $2::timestamptz - ($4 || ' days')::interval
+            END
       ORDER BY COALESCE(deployed_at, authored_at) DESC`,
-    [session.project_id, session.started_at, String(windowDays)],
+    [
+      session.project_id,
+      session.started_at,
+      String(windowDays),
+      String(Math.max(windowDays, UNDATED_WINDOW_DAYS)),
+    ],
   );
 
   base.deployedInWindow = inWindow.length;

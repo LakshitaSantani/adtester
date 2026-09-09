@@ -58,6 +58,8 @@ export type Counterfactual =
       separation: number;
       releasesWith: string[];
       releasesWithout: string[];
+      /** The stretch when both sets of builds were serving traffic. */
+      overlap: { start: string; end: string; hours: number };
     }
   | {
       available: true;
@@ -165,43 +167,85 @@ async function tryVersionSplit(
   // just inside the window — otherwise every build looks like it started when
   // the window opened, and an old build still being served from cache gets
   // counted as carrying the change.
+  // When each build started AND stopped serving. The stop time is what makes
+  // a rollback visible: a build that was withdrawn has a last_seen in the
+  // past while an older one carries on.
+  const fleet = await db.query<{
+    release: string;
+    first_seen: string;
+    last_seen: string;
+  }>(
+    `SELECT release,
+            MIN(started_at)::text AS first_seen,
+            MAX(started_at)::text AS last_seen
+       FROM sessions
+      WHERE project_id = $1 AND release IS NOT NULL AND release <> ''
+      GROUP BY release`,
+    [projectId],
+  );
+
+  if (fleet.length === 0) return null; // nothing stamped — try temporal
+
+  const commitTime = new Date(commitDeployedAt).getTime();
+  const carriers = fleet.filter((r) => new Date(r.first_seen).getTime() >= commitTime);
+  const priors = fleet.filter((r) => new Date(r.first_seen).getTime() < commitTime);
+
+  if (carriers.length === 0 || priors.length === 0) return null;
+
+  // Compare only the stretch when both sets of builds were actually live.
+  //
+  // Classifying by first appearance and then counting everything afterwards
+  // assumes deploys only ever move forward. They don't. A team that spots an
+  // outage and rolls back leaves the new build serving for an hour and the old
+  // one serving for the two days either side — so "with the change" is one bad
+  // hour and "without it" is mostly the calm afterwards, and the arithmetic
+  // reports a difference that is really the rollback's shape rather than the
+  // code's effect. Restricting both groups to the window when both were
+  // running removes it, and does the same favour for a canary that was still
+  // ramping.
+  //
+  // Note what this does NOT fix: a cherry-pick puts the same change in a build
+  // whose first appearance predates the commit, and no amount of timing can
+  // see that. Only commit ancestry can, and that needs parent SHAs the repo
+  // sync doesn't record yet.
+  const overlapStart = Math.min(...carriers.map((r) => new Date(r.first_seen).getTime()));
+  const overlapEnd = Math.min(
+    Math.max(...carriers.map((r) => new Date(r.last_seen).getTime())),
+    Math.max(...priors.map((r) => new Date(r.last_seen).getTime())),
+  );
+
+  const overlapHours = (overlapEnd - overlapStart) / 3_600_000;
+  if (overlapHours <= 0) return null; // never concurrent — try temporal
+
+  const startIso = new Date(Math.max(overlapStart, new Date(windowStart).getTime())).toISOString();
+  const endIso = new Date(overlapEnd).toISOString();
+
   const rows = await db.query<{
     release: string;
     sessions: number;
     affected: number;
-    first_seen: string | null;
   }>(
-    `WITH release_origin AS (
-       SELECT release, MIN(started_at) AS first_seen
-         FROM sessions
-        WHERE project_id = $1 AND release IS NOT NULL AND release <> ''
-        GROUP BY release
-     )
-     SELECT s.release,
+    `SELECT s.release,
             COUNT(*)::int AS sessions,
-            COUNT(*) FILTER (WHERE ${BROKE_HERE})::int AS affected,
-            MIN(o.first_seen)::text AS first_seen
+            COUNT(*) FILTER (WHERE ${BROKE_HERE})::int AS affected
        FROM sessions s
-       JOIN release_origin o ON o.release = s.release
       WHERE s.project_id = $1
         AND s.started_at >= $2::timestamptz
+        AND s.started_at <= $5::timestamptz
         AND s.release IS NOT NULL AND s.release <> ''
         AND ${ON_PAGE}
       GROUP BY s.release`,
-    [projectId, windowStart, signature, path],
+    [projectId, startIso, signature, path, endIso],
   );
 
-  if (rows.length === 0) return null; // nothing stamped — try temporal
-
-  const commitTime = new Date(commitDeployedAt).getTime();
+  const carrierNames = new Set(carriers.map((r) => r.release));
   const withChange = { sessions: 0, affected: 0 };
   const withoutChange = { sessions: 0, affected: 0 };
   const releasesWith: string[] = [];
   const releasesWithout: string[] = [];
 
   for (const row of rows) {
-    if (!row.first_seen) continue;
-    const carries = new Date(row.first_seen).getTime() >= commitTime;
+    const carries = carrierNames.has(row.release);
     const bucket = carries ? withChange : withoutChange;
     bucket.sessions += row.sessions;
     bucket.affected += row.affected;
@@ -227,6 +271,11 @@ async function tryVersionSplit(
     separation: withRate - withoutRate,
     releasesWith,
     releasesWithout,
+    overlap: {
+      start: startIso,
+      end: endIso,
+      hours: (new Date(endIso).getTime() - new Date(startIso).getTime()) / 3_600_000,
+    },
   };
 }
 

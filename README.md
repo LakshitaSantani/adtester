@@ -268,8 +268,18 @@ The same seeded scenario, three ways:
 | Some users still on the old build | **claimed, 0.89** — the real cause wins; the decoy commit, present in both builds, gets no counterfactual and drops to 0.35 |
 | Everyone on the new build at once | **claimed, 0.58** — capped, and it says so |
 | Signature on five different pages | **declined** — can't be pinned to any one page's code |
+| A commit that *fixed* the symptom | **declined** — 3% of sessions on builds carrying it hit this against 35% without, so the evidence against it outweighs everything pointing at it |
+| Site traffic collapses, checkout unchanged | **silent** — checkout failed at 10% last week and 10% today; only the homepage campaign stopped |
 
-Try all three: `POST /api/dev/seed` with `{"scenario": "split" | "no-split" | "diffuse"}`.
+Try them: `POST /api/dev/seed` with `{"scenario": "split" | "no-split" |
+"diffuse" | "fix-commit" | "traffic-shift" | "spa" | "safari" | "backend" |
+"priority" | "no-release"}`.
+
+The last two are there because both failures are invisible from the outside.
+A scorer that treats evidence *against* a commit as merely absent evidence
+still names the repair as the cause; a rate divided by site-wide sessions
+turns a marketing decision into a regression report. Neither produces an
+error, and both produce a confident sentence.
 
 **It refuses in four situations**, and that's the point: too widespread to pin
 down, nothing shipped that touches the page, candidates that can't be

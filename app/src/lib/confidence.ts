@@ -38,6 +38,14 @@ export const NO_COUNTERFACTUAL_CAP = CAP.none;
 /** A separation of this many percentage points earns full marks. */
 const FULL_SEPARATION = 0.2;
 
+/**
+ * How far "before the deploy" is still consistent with "after it".
+ *
+ * Deploy timestamps come from CI and session timestamps from browsers, and
+ * neither agrees with the other to the minute.
+ */
+const CLOCK_SKEW_HOURS = 0.25;
+
 const WEIGHTS = {
   counterfactual: 0.45,
   codePath: 0.2,
@@ -50,7 +58,12 @@ export type SignalName = keyof typeof WEIGHTS | "dilution";
 export type Signal = {
   name: SignalName;
   label: string;
-  /** 0..1 for positive signals; negative for dilution. */
+  /**
+    * -1..1. Negative means this signal argues AGAINST the candidate.
+    *
+    * Three can go negative: the counterfactual when the change made things
+    * better, onset when the symptom predates the deploy, and dilution always.
+    */
   score: number;
   /** How much this moved the final number. */
   contribution: number;
@@ -73,8 +86,13 @@ export type ScoreInput = {
   onsetGapHours: number | null;
   /** Sessions showing the symptom. */
   affectedSessions: number;
-  /** How many candidates survived the same filters, this one included. */
-  candidateCount: number;
+  /**
+    * Candidates the evidence could NOT clear, this one included.
+    *
+    * Not the raw survivor count: a commit whose counterfactual showed the
+    * symptom was no worse with it is not competing for the blame.
+    */
+  rivalCount: number;
   /** Which evidence chain connects this change to the symptom. */
   reachedVia: "route" | "api" | "both";
   /** True when the symptom is a rejected request rather than a client error. */
@@ -92,9 +110,15 @@ function counterfactualSignal(cf: Counterfactual): Signal {
     };
   }
 
-  // Negative separation means the symptom was *less* common with the change,
-  // which is evidence against this commit rather than weak evidence for it.
-  const score = Math.max(0, Math.min(1, cf.separation / FULL_SEPARATION));
+  // Negative separation means the symptom was *less* common with the change.
+  //
+  // This used to clamp to zero, which sounds conservative and is not: a
+  // commit that measurably FIXED the symptom scored 0 here and then collected
+  // full marks from code path, onset and volume — enough to clear the claim
+  // threshold and be named as the cause of the bug it repaired. Silence from
+  // the one signal that can exonerate is not neutrality. Evidence against has
+  // to be able to push the number down, so the scale runs to -1.
+  const score = Math.max(-1, Math.min(1, cf.separation / FULL_SEPARATION));
   const withPct = (cf.withChange.rate * 100).toFixed(0);
   const withoutPct = (cf.withoutChange.rate * 100).toFixed(0);
 
@@ -111,7 +135,8 @@ function counterfactualSignal(cf: Counterfactual): Signal {
       contribution: score * WEIGHTS.counterfactual,
       detail:
         `${withPct}% of ${cf.withChange.sessions} sessions on builds with the change hit ` +
-        `this, against ${withoutPct}% of ${cf.withoutChange.sessions} on builds without it` +
+        `this, against ${withoutPct}% of ${cf.withoutChange.sessions} on builds without it, ` +
+        `over the ${cf.overlap.hours.toFixed(1)} hours both were serving traffic` +
         worseOrNot,
     };
   }
@@ -191,8 +216,30 @@ function onsetSignal(gapHours: number | null): Signal {
   }
 
   const gap = Math.abs(gapHours);
-  const score = gap <= 1 ? 1 : gap <= 6 ? 0.7 : gap <= 24 ? 0.4 : 0.1;
   const rounded = gap < 1 ? `${Math.round(gap * 60)} minutes` : `${gap.toFixed(1)} hours`;
+
+  // Taking the absolute value scored "started six hours BEFORE the deploy"
+  // exactly as highly as six hours after, while the sentence underneath said
+  // it argued against the commit. Code cannot break something that was
+  // already broken, so the sign has to survive into the arithmetic.
+  //
+  // It doesn't go all the way to -1, because startedAt is the earliest
+  // matching session in the window rather than a true onset: one unrelated
+  // session of the same shape drags it earlier. Enough to sink a candidate
+  // that has nothing else going for it, not enough to override a decisive
+  // counterfactual on its own.
+  const score =
+    gapHours >= -CLOCK_SKEW_HOURS
+      ? gap <= 1
+        ? 1
+        : gap <= 6
+          ? 0.7
+          : gap <= 24
+            ? 0.4
+            : 0.1
+      : gap <= 6
+        ? -0.4
+        : -1;
 
   return {
     name: "onset",
@@ -221,11 +268,21 @@ function volumeSignal(sessions: number): Signal {
 }
 
 /**
- * Other survivors of the same filters make any single one less likely to be
- * the culprit. This signal can only ever subtract.
+ * Other candidates that could still explain this make any single one less
+ * likely to be the culprit. This signal can only ever subtract.
+ *
+ * "Still could" is the whole point, and it used to be missing: the penalty
+ * counted every commit that touched a reachable file, so three people
+ * pushing comment and styling changes to checkout that week docked the real
+ * culprit 0.24 — after the counterfactual had already measured those three at
+ * zero correlation with the symptom. Evidence that clears a commit should
+ * remove it from the crowd, not leave it there as a shadow of doubt.
+ *
+ * A rival is one we could not clear: either it has no counterfactual at all,
+ * or it has one and the symptom was worse with it.
  */
-function dilutionSignal(candidates: number): Signal {
-  const others = Math.max(0, candidates - 1);
+function dilutionSignal(rivals: number): Signal {
+  const others = Math.max(0, rivals - 1);
   const penalty = Math.min(0.3, others * 0.08);
   return {
     name: "dilution",
@@ -250,7 +307,7 @@ export function score(input: ScoreInput): Scored {
     ),
     onsetSignal(input.onsetGapHours),
     volumeSignal(input.affectedSessions),
-    dilutionSignal(input.candidateCount),
+    dilutionSignal(input.rivalCount),
   ];
 
   const positive = signals
