@@ -223,3 +223,30 @@ CREATE TABLE IF NOT EXISTS code_edges (
 CREATE INDEX IF NOT EXISTS code_edges_from ON code_edges (project_id, from_path);
 
 CREATE INDEX IF NOT EXISTS commits_sha_prefix ON commits (project_id, sha);
+
+-- ================================================================ phase 4.5
+-- Importing from tools that already hold real data.
+--
+-- The point of this table is to stop waiting. A customer's PostHog account
+-- has months of real recordings from real users; borrowing them lets the
+-- brain be tested today instead of after a fortnight of collecting our own.
+
+CREATE TABLE IF NOT EXISTS data_sources (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind           TEXT NOT NULL,        -- posthog | notion | transcripts
+  -- Host, remote project id, credentials. Shape depends on `kind`.
+  config         JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_synced_at TIMESTAMPTZ,
+  last_error     TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, kind)
+);
+
+-- Where a session came from, so imported and self-recorded sessions can live
+-- side by side and be told apart.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'sdk';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS external_id TEXT;
+
+CREATE INDEX IF NOT EXISTS sessions_external
+  ON sessions (project_id, source, external_id);

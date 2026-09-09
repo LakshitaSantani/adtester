@@ -16,10 +16,24 @@
 import type { Counterfactual } from "./counterfactual";
 
 /**
- * Confidence with no counterfactual can never exceed this, however neatly
- * everything else lines up.
+ * How good the comparison was decides one thing: how high this can go.
+ *
+ *   version split — some users on the new build, others still on the old, at
+ *   the same time. Time is held constant and only the code differs. No cap.
+ *
+ *   before / after — nobody stamped a build, so we compare the same page
+ *   either side of the deploy. Which code each session ran is still certain;
+ *   what can't be ruled out is everything else that moved that afternoon.
+ *
+ *   nothing — everything left is circumstantial.
+ *
+ * One number per mode, and it is a ceiling rather than a discount. An earlier
+ * version did both — shrank the score AND capped it — which penalised the
+ * same weakness twice and made the arithmetic impossible to reason about.
  */
-export const NO_COUNTERFACTUAL_CAP = 0.7;
+const CAP = { version_split: 1, temporal: 0.85, none: 0.7 } as const;
+
+export const NO_COUNTERFACTUAL_CAP = CAP.none;
 
 /** A separation of this many percentage points earns full marks. */
 const FULL_SEPARATION = 0.2;
@@ -80,17 +94,43 @@ function counterfactualSignal(cf: Counterfactual): Signal {
   const withPct = (cf.withChange.rate * 100).toFixed(0);
   const withoutPct = (cf.withoutChange.rate * 100).toFixed(0);
 
+  const worseOrNot =
+    cf.separation <= 0
+      ? " — no worse with the change, which argues against this commit."
+      : ".";
+
+  if (cf.mode === "version_split") {
+    return {
+      name: "counterfactual",
+      label: "Counterfactual",
+      score,
+      contribution: score * WEIGHTS.counterfactual,
+      detail:
+        `${withPct}% of ${cf.withChange.sessions} sessions on builds with the change hit ` +
+        `this, against ${withoutPct}% of ${cf.withoutChange.sessions} on builds without it` +
+        worseOrNot,
+    };
+  }
+
+  // Temporal. Say plainly what was compared and what it can't rule out —
+  // a reader who knows a campaign launched that afternoon should be able to
+  // discount this themselves.
+  const shared =
+    cf.coDeployed > 0
+      ? ` ${cf.coDeployed} other change${cf.coDeployed > 1 ? "s" : ""} went out in the same ` +
+        `deploy, so timing alone cannot separate them.`
+      : " Nothing else deployed at that moment.";
+
   return {
     name: "counterfactual",
-    label: "Counterfactual",
+    label: "Before / after",
     score,
     contribution: score * WEIGHTS.counterfactual,
     detail:
-      `${withPct}% of ${cf.withChange.sessions} sessions with the change hit this, ` +
-      `against ${withoutPct}% of ${cf.withoutChange.sessions} without it` +
-      (cf.separation <= 0
-        ? " — no worse with the change, which argues against this commit."
-        : "."),
+      `No build stamps, so this compares the same page either side of the deploy: ` +
+      `${withPct}% of ${cf.withChange.sessions} sessions after against ` +
+      `${withoutPct}% of ${cf.withoutChange.sessions} before${worseOrNot}` +
+      shared,
   };
 }
 
@@ -191,14 +231,17 @@ export function score(input: ScoreInput): Scored {
   let capped = false;
 
   if (input.counterfactual.available) {
-    confidence = positive + dilution;
+    const ceiling = CAP[input.counterfactual.mode];
+    const raw = positive + dilution;
+    confidence = Math.min(raw, ceiling);
+    capped = raw > ceiling;
   } else {
     // Without the counterfactual, the remaining weights only add to 0.55.
     // Rescaling them to fill the cap would quietly pretend the missing
     // evidence didn't matter, so instead the ceiling is real: a perfect
     // score on everything else reaches the cap and no further.
     const available = WEIGHTS.codePath + WEIGHTS.onset + WEIGHTS.volume;
-    confidence = (positive / available) * NO_COUNTERFACTUAL_CAP + dilution;
+    confidence = (positive / available) * CAP.none + dilution;
     capped = true;
   }
 

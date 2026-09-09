@@ -22,7 +22,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -146,8 +146,8 @@ export async function POST(request: Request) {
     }
   };
 
-  // Last week on the old build: the phone field almost never troubled anyone.
-  await make("b7d2e10", OLD_BUILD_AT, 140, 60, 1, "/checkout");
+  // Last week: the phone field almost never troubled anyone.
+  await make(scenario === "no-release" ? "" : "b7d2e10", OLD_BUILD_AT, 140, 60, 1, "/checkout");
 
   if (scenario === "diffuse") {
     // The same signature all over the site. Nothing about one page's code can
@@ -156,6 +156,11 @@ export async function POST(request: Request) {
     for (const path of ["/checkout", "/account", "/search", "/cart", "/help"]) {
       await make("a3f91c2", NEW_BUILD_AT, 20, 12, 7, path);
     }
+  } else if (scenario === "no-release") {
+    // What imported PostHog data actually looks like: real sessions, no build
+    // stamps anywhere. The investigator has to fall back to comparing the
+    // same page before and after the deploy.
+    await make("", NEW_BUILD_AT, 20, 55, 23, "/checkout");
   } else if (scenario === "no-split") {
     // Everyone moved to the new build at once — the common case for teams
     // that don't do gradual rollouts. There is no control group, so the
@@ -182,6 +187,10 @@ export async function POST(request: Request) {
     diffuse:
       "The signature is on five different pages. The investigator should decline " +
       "rather than blame a commit behind any one of them.",
+    "no-release":
+      "No build stamps anywhere, which is what imported PostHog data looks like. " +
+      "The investigator should fall back to comparing the page before and after " +
+      "the deploy, still name a3f91c2, and cap confidence at 0.85.",
   };
 
   return NextResponse.json({

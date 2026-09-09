@@ -19,7 +19,9 @@ import { createGunzip } from "node:zlib";
 import { candidatesForSession } from "./candidates";
 import { getDb } from "./db";
 import * as gh from "./github";
+import { importFromPostHog } from "./import-posthog";
 import { investigate } from "./investigate";
+import type { PostHogConfig } from "./posthog";
 import { claimNext, fail, finish, type Job } from "./jobs";
 import {
   classify,
@@ -224,6 +226,52 @@ async function runInvestigations(job: Job): Promise<void> {
   if (done === 0) console.log("investigate: all current symptoms already reported");
 }
 
+/**
+ * Pull a window of real recordings out of a PostHog account.
+ *
+ * Enqueues an investigation afterwards, because the entire reason to import
+ * is to point the brain at real behaviour immediately.
+ */
+async function importPostHog(job: Job): Promise<void> {
+  const db = await getDb();
+  const source = await db.one<{ id: string; config: Record<string, unknown> | string }>(
+    `SELECT id, config FROM data_sources WHERE project_id = $1 AND kind = 'posthog'`,
+    [job.project_id],
+  );
+  if (!source) throw new Error("no PostHog account connected for this project");
+
+  const config = (
+    typeof source.config === "string" ? JSON.parse(source.config) : source.config
+  ) as PostHogConfig;
+
+  try {
+    const summary = await importFromPostHog(job.project_id, config, {
+      limit: Number(job.payload.limit ?? 100),
+      afterDays: Number(job.payload.afterDays ?? 30),
+    });
+
+    await db.query(
+      `UPDATE data_sources SET last_synced_at = now(), last_error = NULL WHERE id = $1`,
+      [source.id],
+    );
+
+    const signatures = Object.entries(summary.signatureCounts)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ");
+    console.log(
+      `import_posthog: ${summary.imported} imported, ${summary.skipped} already had, ` +
+        `${summary.failed} failed, ${summary.withRelease} carried a build` +
+        (signatures ? ` | ${signatures}` : ""),
+    );
+  } catch (error) {
+    await db.query(`UPDATE data_sources SET last_error = $2 WHERE id = $1`, [
+      source.id,
+      error instanceof Error ? error.message : String(error),
+    ]);
+    throw error;
+  }
+}
+
 async function inferDeploys(job: Job): Promise<void> {
   const count = await inferDeployTimes(job.project_id);
   console.log(`infer_deploys: filled ${count} deploy times`);
@@ -302,6 +350,7 @@ const HANDLERS: Record<string, (job: Job) => Promise<void>> = {
   index_repo: indexRepo,
   infer_deploys: inferDeploys,
   investigate: runInvestigations,
+  import_posthog: importPostHog,
 };
 
 // Same reasoning as the database singleton: a hot reload must not start a

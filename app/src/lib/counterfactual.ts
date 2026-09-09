@@ -3,14 +3,27 @@
  *
  * Everything else in the investigator is circumstantial: a change shipped
  * before the problem, and it touches code the page uses. So does half the
- * week's work. This is the one measurement that comes close to an
- * experiment — compare people who got the change against people who didn't,
- * over the same hours, and see whether the symptom follows the change.
+ * week's work. This is the one measurement that comes close to an experiment
+ * — compare people who got the change against people who didn't.
  *
- * When some users are still on an older build while others have the new one,
- * that is a natural experiment nobody had to set up. It is the difference
- * between "this is suspicious" and "this is why", and it is the only signal
- * allowed to license high confidence.
+ * There are two ways to find those two groups, and they are not equally
+ * strong:
+ *
+ *   VERSION SPLIT — some users are on the new build while others are still on
+ *   the old one, at the same time. Time is held constant and the only
+ *   difference is the code. Near-experimental, and the only thing allowed to
+ *   license high confidence.
+ *
+ *   TEMPORAL — nobody stamped a build, but we know when the deploy landed, so
+ *   sessions before it ran the old code and sessions after ran the new one.
+ *   The grouping is a fact, not a guess. What's weaker is the comparison: the
+ *   groups differ in time as well as in code, so anything else that changed
+ *   that afternoon is confounded with it.
+ *
+ * The temporal path matters more than it looks. Almost no analytics tool
+ * records the customer's build version, so without it the strongest signal
+ * would be unavailable on nearly all imported data and everything would sit
+ * at the cap forever.
  */
 
 import { getDb } from "./db";
@@ -18,16 +31,37 @@ import { getDb } from "./db";
 /** Each side needs at least this many sessions to mean anything. */
 const MIN_GROUP_SIZE = 5;
 
+/** How far either side of a deploy the temporal comparison reaches. */
+const TEMPORAL_WINDOW_HOURS = 72;
+
+/**
+ * Deploys within this of each other are one release event. Commits inside it
+ * are indistinguishable by timing alone, which is worth saying out loud
+ * rather than pretending to separate them.
+ */
+const CO_DEPLOY_MINUTES = 30;
+
+type Group = { sessions: number; affected: number; rate: number };
+
 export type Counterfactual =
   | {
       available: true;
-      withChange: { sessions: number; affected: number; rate: number };
-      withoutChange: { sessions: number; affected: number; rate: number };
-      /** Percentage points. Positive means the change looks responsible. */
+      mode: "version_split";
+      withChange: Group;
+      withoutChange: Group;
       separation: number;
-      /** Builds compared, for the evidence trail. */
       releasesWith: string[];
       releasesWithout: string[];
+    }
+  | {
+      available: true;
+      mode: "temporal";
+      withChange: Group;
+      withoutChange: Group;
+      separation: number;
+      /** Other commits that went out at the same moment. */
+      coDeployed: number;
+      deployedAt: string;
     }
   | {
       available: false;
@@ -39,25 +73,17 @@ export type Counterfactual =
       detail: string;
     };
 
-type SessionRow = {
-  release: string;
-  sessions: number;
-  affected: number;
-};
+const PATH_SQL = `split_part(split_part(regexp_replace(entry_url, '^https?://[^/]+', ''), '?', 1), '#', 1)`;
 
 /**
  * Does a build contain a given commit?
  *
- * Answered by deploy time rather than by commit ancestry: a build deployed
- * at or after the commit's deploy time contains it. That is exact for the
- * ordinary case of a single branch deployed in sequence, and wrong for
- * cherry-picks, hotfix branches and rollbacks.
- *
- * The precise answer needs the commit graph (GitHub's compare endpoint says
- * whether one commit is an ancestor of another), which costs a request per
- * pair and is worth adding when a real repo shows this approximation
- * misattributing something. Until then this keeps the whole test to one
- * query.
+ * Answered by deploy time rather than commit ancestry: a build first seen at
+ * or after the commit went out contains it. Exact for a single branch
+ * deployed in sequence; wrong for cherry-picks, hotfix branches and
+ * rollbacks. The precise answer needs the commit graph, which costs a request
+ * per pair and is worth adding when a real repo shows this misattributing
+ * something.
  */
 export async function testCounterfactual(
   projectId: string,
@@ -77,20 +103,46 @@ export async function testCounterfactual(
     return {
       available: false,
       reason: "no_deploy_time",
-      detail:
-        "This commit has no known deploy time, so we can't tell which builds carry it.",
+      detail: "This commit has no known deploy time, so there is nothing to split users on.",
     };
   }
 
-  // Every build seen since the window opened, with how often the symptom
-  // occurred on it — and, separately, when that build was FIRST seen at all.
-  //
-  // The "first seen at all" part has to look outside the window. Taking the
-  // earliest session inside the window instead would date every build to
-  // roughly when the window opened, so an old build still being served from
-  // cache would look newer than the commit and get counted as carrying it —
-  // which quietly collapses the two groups the whole test depends on.
-  const rows = await db.query<SessionRow & { first_seen: string | null }>(
+  const split = await tryVersionSplit(
+    db,
+    projectId,
+    commit.deployed_at,
+    signature,
+    path,
+    windowStart,
+  );
+  if (split) return split;
+
+  // No usable build stamps. Fall back to comparing the same page before and
+  // after the deploy landed.
+  return tryTemporal(db, projectId, commitSha, commit.deployed_at, signature, path);
+}
+
+type Db = Awaited<ReturnType<typeof getDb>>;
+
+/** The strong path: two builds live at once. */
+async function tryVersionSplit(
+  db: Db,
+  projectId: string,
+  commitDeployedAt: string,
+  signature: string,
+  path: string | null,
+  windowStart: string,
+): Promise<Counterfactual | null> {
+  // Each build's first appearance has to be measured across all history, not
+  // just inside the window — otherwise every build looks like it started when
+  // the window opened, and an old build still being served from cache gets
+  // counted as carrying the change.
+  const rows = await db.query<{
+    release: string;
+    sessions: number;
+    affected: number;
+    first_seen: string | null;
+  }>(
     `WITH release_origin AS (
        SELECT release, MIN(started_at) AS first_seen
          FROM sessions
@@ -106,73 +158,123 @@ export async function testCounterfactual(
       WHERE s.project_id = $1
         AND s.started_at >= $2::timestamptz
         AND s.release IS NOT NULL AND s.release <> ''
-        AND ($4::text IS NULL OR
-             split_part(split_part(regexp_replace(s.entry_url, '^https?://[^/]+', ''), '?', 1), '#', 1) = $4)
+        AND ($4::text IS NULL OR ${PATH_SQL} = $4)
       GROUP BY s.release`,
     [projectId, windowStart, signature, path],
   );
 
-  if (rows.length === 0) {
-    return {
-      available: false,
-      reason: "no_release_data",
-      detail:
-        "No sessions in this window recorded which build they were on. " +
-        "Set data-swy-release in the install snippet — without it, changes " +
-        "can never be separated from each other.",
-    };
-  }
+  if (rows.length === 0) return null; // nothing stamped — try temporal
 
-  const commitTime = new Date(commit.deployed_at).getTime();
-
+  const commitTime = new Date(commitDeployedAt).getTime();
   const withChange = { sessions: 0, affected: 0 };
   const withoutChange = { sessions: 0, affected: 0 };
   const releasesWith: string[] = [];
   const releasesWithout: string[] = [];
 
   for (const row of rows) {
-    const releaseTime = row.first_seen ? new Date(row.first_seen).getTime() : null;
-    if (releaseTime === null) continue;
-
-    // A build first seen at or after the commit went out carries it.
-    const carries = releaseTime >= commitTime;
+    if (!row.first_seen) continue;
+    const carries = new Date(row.first_seen).getTime() >= commitTime;
     const bucket = carries ? withChange : withoutChange;
     bucket.sessions += row.sessions;
     bucket.affected += row.affected;
     (carries ? releasesWith : releasesWithout).push(row.release);
   }
 
-  if (releasesWith.length === 0 || releasesWithout.length === 0) {
-    return {
-      available: false,
-      reason: "no_version_split",
-      detail:
-        "Every session in this window was on the same side of this change. " +
-        "Without users on both sides there is no comparison to make — only " +
-        "before and after, which anything else shipping that day would also explain.",
-    };
-  }
+  const usable =
+    releasesWith.length > 0 &&
+    releasesWithout.length > 0 &&
+    withChange.sessions >= MIN_GROUP_SIZE &&
+    withoutChange.sessions >= MIN_GROUP_SIZE;
 
-  if (withChange.sessions < MIN_GROUP_SIZE || withoutChange.sessions < MIN_GROUP_SIZE) {
-    return {
-      available: false,
-      reason: "groups_too_small",
-      detail:
-        `Only ${withChange.sessions} sessions with the change and ` +
-        `${withoutChange.sessions} without. Too few to tell a real difference ` +
-        `from noise.`,
-    };
-  }
+  if (!usable) return null; // fall through to temporal
 
   const withRate = withChange.affected / withChange.sessions;
   const withoutRate = withoutChange.affected / withoutChange.sessions;
 
   return {
     available: true,
+    mode: "version_split",
     withChange: { ...withChange, rate: withRate },
     withoutChange: { ...withoutChange, rate: withoutRate },
     separation: withRate - withoutRate,
     releasesWith,
     releasesWithout,
+  };
+}
+
+/**
+ * The fallback: the same page, before and after the deploy.
+ *
+ * Which code each session ran is known for certain — that part is not
+ * inferred. What can't be ruled out is everything else that moved at the same
+ * time, which is why this mode is capped lower and why co-deployed commits
+ * are counted and reported.
+ */
+async function tryTemporal(
+  db: Db,
+  projectId: string,
+  commitSha: string,
+  deployedAt: string,
+  signature: string,
+  path: string | null,
+): Promise<Counterfactual> {
+  const [row] = await db.query<{
+    before_sessions: number;
+    before_affected: number;
+    after_sessions: number;
+    after_affected: number;
+  }>(
+    `SELECT
+       COUNT(*) FILTER (WHERE started_at <  $2::timestamptz)::int AS before_sessions,
+       COUNT(*) FILTER (WHERE started_at <  $2::timestamptz
+                          AND $3 = ANY(signatures))::int AS before_affected,
+       COUNT(*) FILTER (WHERE started_at >= $2::timestamptz)::int AS after_sessions,
+       COUNT(*) FILTER (WHERE started_at >= $2::timestamptz
+                          AND $3 = ANY(signatures))::int AS after_affected
+       FROM sessions
+      WHERE project_id = $1
+        AND started_at >= $2::timestamptz - ($5 || ' hours')::interval
+        AND started_at <= $2::timestamptz + ($5 || ' hours')::interval
+        AND ($4::text IS NULL OR ${PATH_SQL} = $4)`,
+    [projectId, deployedAt, signature, path, String(TEMPORAL_WINDOW_HOURS)],
+  );
+
+  const before = row?.before_sessions ?? 0;
+  const after = row?.after_sessions ?? 0;
+
+  if (before < MIN_GROUP_SIZE || after < MIN_GROUP_SIZE) {
+    return {
+      available: false,
+      reason: "groups_too_small",
+      detail:
+        `Only ${before} sessions on this page before the deploy and ${after} after. ` +
+        `Too few either side to tell a real difference from noise.`,
+    };
+  }
+
+  // How many other commits went out at the same moment? They share this exact
+  // comparison, so timing alone cannot tell them apart.
+  const [co] = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM commits
+      WHERE project_id = $1 AND sha <> $2 AND deployed_at IS NOT NULL
+        AND ABS(EXTRACT(EPOCH FROM (deployed_at - $3::timestamptz))) <= $4`,
+    [projectId, commitSha, deployedAt, CO_DEPLOY_MINUTES * 60],
+  );
+
+  const beforeRate = (row?.before_affected ?? 0) / before;
+  const afterRate = (row?.after_affected ?? 0) / after;
+
+  return {
+    available: true,
+    mode: "temporal",
+    withChange: { sessions: after, affected: row?.after_affected ?? 0, rate: afterRate },
+    withoutChange: {
+      sessions: before,
+      affected: row?.before_affected ?? 0,
+      rate: beforeRate,
+    },
+    separation: afterRate - beforeRate,
+    coDeployed: co?.n ?? 0,
+    deployedAt,
   };
 }

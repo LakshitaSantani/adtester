@@ -181,11 +181,15 @@ export default async function ReportPage({
       })}
 
       <div className="note">
-        <b>How to read the numbers.</b> Only the counterfactual — comparing users who got a
-        change against users who didn&apos;t — can push confidence above 0.70. Everything else
-        is circumstantial: plenty of changes ship before a problem and touch code the page
-        uses. When a change went to everyone at once there is no comparison to make, so the
-        score is capped and says so.
+        <b>How to read the numbers.</b> Everything except the comparison is circumstantial —
+        plenty of changes ship before a problem and touch code the page uses. Comparing users
+        who got a change against users who didn&apos;t is what turns suspicion into evidence,
+        and there are two ways to get those groups. When some users were on the old build
+        while others had the new one, time is held constant and only the code differs: that
+        can reach full confidence. When nobody stamped a build, the comparison is the same
+        page before and after the deploy — which code each session ran is still certain, but
+        anything else that changed that afternoon is mixed in, so it is capped at 0.85. With
+        no comparison at all, the ceiling is 0.70.
       </div>
     </div>
   );
