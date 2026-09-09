@@ -29,6 +29,10 @@ import type { PostHogConfig } from "./posthog";
 import { claimNext, fail, finish, type Job } from "./jobs";
 import {
   classify,
+  isBarrel,
+  parseBarrel,
+  resolveThroughBarrels,
+  type BarrelMap,
   inferDeployTimes,
   isIndexable,
   packageRootsFrom,
@@ -162,14 +166,36 @@ async function indexRepo(job: Job): Promise<void> {
     const entities: Entity[] = indexable.map(classify);
     const edges: Array<[string, string]> = [];
 
+    // First pass: read the barrels, so the second pass can route named
+    // imports past them to the file that actually defines the thing.
+    const barrels = new Map<string, BarrelMap>();
+    for (const rel of indexable) {
+      if (!isBarrel(rel)) continue;
+      try {
+        const abs = path.join(root, rel);
+        if ((await stat(abs)).size > MAX_FILE_BYTES) continue;
+        barrels.set(rel, parseBarrel(await readFile(abs, "utf8")));
+      } catch {
+        // A barrel we can't read just stops being a shortcut.
+      }
+    }
+
+    let throughBarrels = 0;
+
     for (const rel of indexable) {
       const abs = path.join(root, rel);
       try {
         if ((await stat(abs)).size > MAX_FILE_BYTES) continue;
         const source = await readFile(abs, "utf8");
-        for (const specifier of parseImports(source)) {
-          const target = resolveImport(rel, specifier, known, packageRoots);
-          if (target && target !== rel) edges.push([rel, target]);
+        for (const ref of parseImports(source)) {
+          const targets = resolveThroughBarrels(rel, ref, known, barrels, packageRoots);
+          for (const target of targets) {
+            if (target !== rel) edges.push([rel, target]);
+          }
+          if (targets.length > 0 && ref.names.length > 0 && !ref.wholeModule) {
+            const direct = resolveImport(rel, ref.specifier, known, packageRoots);
+            if (direct && barrels.has(direct)) throughBarrels += 1;
+          }
         }
       } catch {
         // An unreadable file costs us its imports, not the whole index.
@@ -181,6 +207,7 @@ async function indexRepo(job: Job): Promise<void> {
     const routes = entities.filter((e) => e.route !== null).length;
     console.log(
       `index_repo: ${entities.length} files, ${routes} routes, ${edges.length} imports` +
+        (barrels.size > 0 ? `, ${barrels.size} barrels (${throughBarrels} imports routed past)` : "") +
         (packageRoots.length > 1 ? `, ${packageRoots.length} packages` : ""),
     );
   } finally {

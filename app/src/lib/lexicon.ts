@@ -154,24 +154,111 @@ export function routeMatches(pattern: string, actual: string): boolean {
 
 // --- imports ---------------------------------------------------------------
 
-const IMPORT_PATTERNS = [
-  /import\s+[\s\S]*?from\s+["']([^"']+)["']/g,
-  /import\s+["']([^"']+)["']/g,
-  /require\(\s*["']([^"']+)["']\s*\)/g,
-  /import\(\s*["']([^"']+)["']\s*\)/g,
-  /export\s+[\s\S]*?from\s+["']([^"']+)["']/g,
-];
+/**
+ * What a file imports, and by what name.
+ *
+ * The names matter because of barrel files. `import { Button } from "./ui"`
+ * resolves to ui/index.ts, and a barrel re-exporting fifty components would
+ * otherwise make all fifty reachable from anything that imported one. On a
+ * barrel-heavy repository that inflates the reachable set until the code-path
+ * filter stops filtering — and it fails quietly, by letting irrelevant commits
+ * through rather than by breaking.
+ *
+ * Still regex rather than a real parser. An AST would be more accurate, and
+ * the accuracy it buys mostly does not change which commits survive: what
+ * changes the answer is barrels, and those are handled directly below.
+ */
+export type ImportRef = {
+  specifier: string;
+  /** Named imports. Empty for a default, namespace or side-effect import. */
+  names: string[];
+  /** True when the whole module is pulled in, so no name can narrow it. */
+  wholeModule: boolean;
+};
 
-export function parseImports(source: string): string[] {
-  const found = new Set<string>();
-  for (const pattern of IMPORT_PATTERNS) {
+const NAMED_IMPORT = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
+// Everything that ISN'T a named import: default, namespace, side-effect.
+// The lookahead is load-bearing — without it this also matched
+// `import { X } from "y"`, marked the whole module as pulled in, and silently
+// switched off the barrel routing below.
+const OTHER_IMPORT = /import\s+(?![^"';]*\{)[^"';]*?["']([^"']+)["']/g;
+const REQUIRE_LIKE = /(?:require|import)\(\s*["']([^"']+)["']\s*\)/g;
+const NAMED_REEXPORT = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
+const STAR_REEXPORT = /export\s+\*\s*(?:as\s+\w+\s*)?from\s*["']([^"']+)["']/g;
+
+function splitNames(clause: string): string[] {
+  return clause
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    // `{ Button as Btn }` — the exported name is what the barrel knows it by.
+    .map((part) => part.split(/\s+as\s+/)[0].replace(/^type\s+/, "").trim())
+    .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name));
+}
+
+export function parseImports(source: string): ImportRef[] {
+  const bySpecifier = new Map<string, ImportRef>();
+
+  const add = (specifier: string, names: string[], wholeModule: boolean) => {
+    const existing = bySpecifier.get(specifier);
+    if (existing) {
+      for (const n of names) if (!existing.names.includes(n)) existing.names.push(n);
+      existing.wholeModule = existing.wholeModule || wholeModule;
+      return;
+    }
+    bySpecifier.set(specifier, { specifier, names: [...names], wholeModule });
+  };
+
+  for (const [pattern, hasNames] of [
+    [NAMED_IMPORT, true],
+    [NAMED_REEXPORT, true],
+  ] as const) {
     pattern.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(source)) !== null) {
-      found.add(match[1]);
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(source)) !== null) {
+      add(m[2], splitNames(m[1]), false);
     }
   }
-  return Array.from(found);
+
+  for (const pattern of [OTHER_IMPORT, REQUIRE_LIKE, STAR_REEXPORT]) {
+    pattern.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(source)) !== null) {
+      // A default, namespace or star import gives no name to narrow by, so
+      // the whole module really is reachable.
+      add(m[1], [], true);
+    }
+  }
+
+  return [...bySpecifier.values()];
+}
+
+/** Files named index.* are where re-export barrels live. */
+export function isBarrel(path: string): boolean {
+  return /(^|\/)index\.(tsx?|jsx?|mjs)$/.test(path);
+}
+
+export type BarrelMap = {
+  /** Exported name -> the specifier it actually comes from. */
+  named: Map<string, string>;
+  /** `export * from "..."` — no names, so nothing can be narrowed. */
+  stars: string[];
+};
+
+export function parseBarrel(source: string): BarrelMap {
+  const named = new Map<string, string>();
+  const stars: string[] = [];
+
+  NAMED_REEXPORT.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = NAMED_REEXPORT.exec(source)) !== null) {
+    for (const name of splitNames(m[1])) named.set(name, m[2]);
+  }
+
+  STAR_REEXPORT.lastIndex = 0;
+  while ((m = STAR_REEXPORT.exec(source)) !== null) stars.push(m[1]);
+
+  return { named, stars };
 }
 
 const EXTENSION_CANDIDATES = [
@@ -248,6 +335,76 @@ export function packageRootsFrom(files: string[]): string[] {
     roots.add(dir);
   }
   return Array.from(roots).sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Follow a named import through any barrels in the way.
+ *
+ * `import { Button } from "./ui"` lands on ui/index.ts, which re-exports fifty
+ * components. Without this, importing one of them makes all fifty reachable,
+ * and on a barrel-heavy repository the reachable set inflates until the
+ * code-path filter stops filtering anything out.
+ *
+ * Resolving by name gives the edge that actually exists: the page depends on
+ * Button.tsx, not on everything Button.tsx happens to sit beside.
+ *
+ * Falls back to the barrel itself when a name can't be traced — a `export *`
+ * chain, a default import, or a name the barrel doesn't declare. Losing
+ * precision there is right: an unresolvable name means we genuinely don't know
+ * which file it came from, and pretending otherwise would drop a real edge.
+ */
+export function resolveThroughBarrels(
+  fromPath: string,
+  ref: ImportRef,
+  known: Set<string>,
+  barrels: Map<string, BarrelMap>,
+  packageRoots: string[],
+  maxHops = 4,
+): string[] {
+  const first = resolveImport(fromPath, ref.specifier, known, packageRoots);
+  if (!first) return [];
+  if (!barrels.has(first) || ref.wholeModule || ref.names.length === 0) {
+    return [first];
+  }
+
+  const out = new Set<string>();
+
+  for (const name of ref.names) {
+    let currentFile = first;
+    let currentName = name;
+    let resolved: string | null = null;
+
+    // Barrels re-export from other barrels often enough to need a loop, and
+    // a cap because they occasionally re-export from each other.
+    for (let hop = 0; hop < maxHops; hop++) {
+      const barrel = barrels.get(currentFile);
+      if (!barrel) {
+        resolved = currentFile;
+        break;
+      }
+
+      const specifier = barrel.named.get(currentName);
+      if (!specifier) {
+        // Only reached through `export *`, so the name can't be traced.
+        // Keeping the barrel is the honest answer.
+        resolved = currentFile;
+        break;
+      }
+
+      const next = resolveImport(currentFile, specifier, known, packageRoots);
+      if (!next) {
+        resolved = currentFile;
+        break;
+      }
+      currentFile = next;
+      // The name keeps its identity across a re-export chain.
+    }
+
+    if (resolved && resolved !== fromPath) out.add(resolved);
+  }
+
+  // A barrel that resolved nothing still represents a real dependency.
+  return out.size > 0 ? [...out] : [first];
 }
 
 function tryExtensions(base: string, known: Set<string>): string | null {
