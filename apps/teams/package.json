@@ -1,0 +1,13 @@
+{
+  "name": "@swy/teams",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The same causal engine, for teams whose work lives in PostHog, Linear and Slack.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

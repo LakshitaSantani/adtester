@@ -26,27 +26,40 @@ export async function ingestDocument(
     occurredAt,
     url,
     source,
+    kind,
   }: {
     filename: string;
     text: string;
     occurredAt?: string | null;
     url?: string | null;
     source?: string;
+    /**
+     * What this is, when the caller already knows.
+     *
+     * isTranscript sniffs, because an uploaded file arrives with nothing but
+     * a name. A connector is not guessing: a Slack thread is a conversation
+     * by construction. Letting it say so matters because the sniff needs five
+     * attributed lines before it believes anything, and a four-line thread
+     * where somebody said "US-only is fine for now, ship the simple version"
+     * would be filed as a document and lose every speaker — which is half of
+     * what makes a quote evidence.
+     */
+    kind?: "prd" | "transcript";
   },
 ): Promise<IngestResult> {
   const db = await getDb();
 
-  const transcript = isTranscript(filename, text);
+  const transcript = kind ? kind === "transcript" : isTranscript(filename, text);
   const chunks: Chunk[] = transcript ? chunkTranscript(text) : chunkDocument(text);
 
   const title = firstHeading(text) ?? filename.replace(/\.[^.]+$/, "");
-  const kind = transcript ? "transcript" : "prd";
+  const resolvedKind = transcript ? "transcript" : "prd";
 
   // Re-uploading the same file replaces it. Documents get revised, and two
   // copies of a PRD would both match and double-count as evidence.
   const existing = await db.one<{ id: string }>(
     `SELECT id FROM documents WHERE project_id = $1 AND title = $2 AND source = $3`,
-    [projectId, title, source ?? kind],
+    [projectId, title, source ?? resolvedKind],
   );
   if (existing) {
     await db.query(`DELETE FROM chunks WHERE document_id = $1`, [existing.id]);
@@ -59,7 +72,7 @@ export async function ingestDocument(
   await db.query(
     `INSERT INTO documents (id, project_id, source, title, url, occurred_at)
      VALUES ($1,$2,$3,$4,$5,$6)`,
-    [documentId, projectId, source ?? kind, title, url ?? null, when],
+    [documentId, projectId, source ?? resolvedKind, title, url ?? null, when],
   );
 
   for (const [position, chunk] of chunks.entries()) {
@@ -81,7 +94,7 @@ export async function ingestDocument(
     );
   }
 
-  return { documentId, title, kind, chunks: chunks.length };
+  return { documentId, title, kind: resolvedKind, chunks: chunks.length };
 }
 
 function firstHeading(text: string): string | null {
