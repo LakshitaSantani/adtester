@@ -14,6 +14,7 @@
 
 import { analyse, fetchFileContents, type Analysis } from "./analyst";
 import { candidatesForSession, type Candidate } from "./candidates";
+import { gitAncestry } from "./git-ancestry";
 import { describeConcentration, qualifier } from "@brain/cohorts";
 import { score, type Scored } from "@brain/confidence";
 import { testCounterfactual, type Counterfactual } from "@brain/counterfactual";
@@ -177,10 +178,11 @@ export async function investigate(
   for (const candidate of narrowed.candidates) {
     const counterfactual = await testCounterfactual(
       projectId,
-      candidate.sha,
+      { id: candidate.sha, landedAt: candidate.deployedAt },
       symptom.signature,
       symptom.path,
       symptom.startedAt,
+      await gitAncestry(projectId, candidate.sha),
     );
 
     const deployedAt = candidate.deployedAt ?? candidate.authoredAt;
