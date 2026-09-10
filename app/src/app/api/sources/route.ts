@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { resolveProject } from "@/lib/auth";
-import { getDb } from "@/lib/db";
-import { newId } from "@/lib/ids";
-import { enqueue } from "@/lib/jobs";
-import { verify, normaliseProjectId, type PostHogConfig } from "@/lib/posthog";
+import { resolveProject } from "@brain/auth";
+import { getDb } from "@brain/db";
+import { newId } from "@brain/ids";
+import { enqueue } from "@brain/jobs";
+import { verify, normaliseProjectId, type PostHogConfig } from "@brain/posthog";
 import { ensureWorker } from "@/lib/worker";
 
 export const runtime = "nodejs";

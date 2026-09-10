@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { resolveProject } from "@/lib/auth";
-import { getDb } from "@/lib/db";
-import { enqueue } from "@/lib/jobs";
+import { resolveProject } from "@brain/auth";
+import { getDb } from "@brain/db";
+import { enqueue } from "@brain/jobs";
 import { ensureWorker } from "@/lib/worker";
 
 export const runtime = "nodejs";

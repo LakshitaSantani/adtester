@@ -1,8 +1,8 @@
 import { gunzipSync } from "node:zlib";
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
-import { INGEST_CORS } from "@/lib/ids";
-import { appendEvents } from "@/lib/storage";
+import { getDb } from "@brain/db";
+import { INGEST_CORS } from "@brain/ids";
+import { appendEvents } from "@brain/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

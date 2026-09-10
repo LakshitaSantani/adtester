@@ -12,7 +12,7 @@
  * forty diffs will always find a story; handed three, it can do real work.
  */
 
-import { getDb } from "./db";
+import { getDb } from "@brain/db";
 import { routeMatches } from "./lexicon";
 
 /** How far back to look for changes that could explain a session. */

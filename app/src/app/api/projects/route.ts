@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
-import { newAdminToken, newInstallKey, newProjectId, newViewToken } from "@/lib/ids";
+import { getDb } from "@brain/db";
+import { newAdminToken, newInstallKey, newProjectId, newViewToken } from "@brain/ids";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

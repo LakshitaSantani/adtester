@@ -27,7 +27,7 @@
  * existing keyword search picks it up with no changes.
  */
 
-import { getDb } from "./db";
+import { getDb } from "@brain/db";
 
 /** Documents sampled for the mapping. */
 const MAX_DOCUMENTS = 40;

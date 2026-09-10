@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import type { Draft, Profile } from "@/lib/profile";
+import type { Draft, Profile } from "@brain/profile";
 import CompetitorSuggestions from "./CompetitorSuggestions";
 
 /**

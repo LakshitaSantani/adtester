@@ -192,6 +192,34 @@ async function createPg(connectionString: string): Promise<Db> {
   };
 }
 
+/**
+ * The schema, from the repository root, wherever that is from here.
+ *
+ * Idempotent — every statement is IF NOT EXISTS — so running it on every cold
+ * start is safe and means there is no migrate step to forget.
+ */
+async function readSchema(): Promise<string> {
+  const tried: string[] = [];
+  let dir = process.cwd();
+
+  for (let up = 0; up < 6; up++) {
+    const candidate = path.join(dir, "db", "schema.sql");
+    tried.push(candidate);
+    try {
+      return await readFile(candidate, "utf8");
+    } catch {
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+
+  throw new Error(
+    `Could not find db/schema.sql. Looked in: ${tried.join(", ")}. ` +
+      `Run from inside the repository, or set the working directory to an app.`,
+  );
+}
+
 async function initialise(): Promise<Db> {
   const url = process.env.DATABASE_URL;
   const db = url ? await createPg(url) : await createPglite();
@@ -199,15 +227,13 @@ async function initialise(): Promise<Db> {
   // The schema is idempotent (every statement is IF NOT EXISTS), so running
   // it on every cold start is safe and means there's no migrate step to
   // forget during development.
-  const schemaPath = path.resolve(process.cwd(), "../db/schema.sql");
-  const fallbackPath = path.resolve(process.cwd(), "db/schema.sql");
-  let schema: string;
-  try {
-    schema = await readFile(schemaPath, "utf8");
-  } catch {
-    schema = await readFile(fallbackPath, "utf8");
-  }
-  await db.exec(schema);
+  //
+  // Found by walking up from wherever the process happens to be running,
+  // rather than guessing a fixed number of levels. There is more than one app
+  // in this repository now and they do not sit at the same depth, so a
+  // hardcoded "../db" is right for one of them and silently wrong for the
+  // next one added.
+  await db.exec(await readSchema());
 
   console.log(url ? "db: connected to Postgres" : `db: using embedded Postgres in ${DATA_DIR}/pg`);
   return db;

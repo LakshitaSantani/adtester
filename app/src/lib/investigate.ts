@@ -14,18 +14,18 @@
 
 import { analyse, fetchFileContents, type Analysis } from "./analyst";
 import { candidatesForSession, type Candidate } from "./candidates";
-import { describeConcentration, qualifier } from "./cohorts";
-import { score, type Scored } from "./confidence";
-import { testCounterfactual, type Counterfactual } from "./counterfactual";
-import { decrypt } from "./crypto";
-import { getDb } from "./db";
+import { describeConcentration, qualifier } from "@brain/cohorts";
+import { score, type Scored } from "@brain/confidence";
+import { testCounterfactual, type Counterfactual } from "@brain/counterfactual";
+import { decrypt } from "@brain/crypto";
+import { getDb } from "@brain/db";
 import { getCommitDiff, type RepoRef } from "./github";
-import { findIntent, type IntentMatch } from "./intent";
-import { eventsAround } from "./market";
-import { buildTimeline, formatTimeline } from "./session-timeline";
-import { newId } from "./ids";
-import { resolveAnthropicKey } from "./secrets";
-import { describeSymptom, isDiffuse, type Symptom } from "./symptoms";
+import { findIntent, type IntentMatch } from "@brain/intent";
+import { eventsAround } from "@brain/market";
+import { buildTimeline, formatTimeline } from "@brain/session-timeline";
+import { newId } from "@brain/ids";
+import { resolveAnthropicKey } from "@brain/secrets";
+import { describeSymptom, isDiffuse, type Symptom } from "@brain/symptoms";
 
 /**
  * Two candidates whose confidence differs by less than this are not

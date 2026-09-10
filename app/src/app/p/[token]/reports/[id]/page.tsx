@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getDb } from "@/lib/db";
+import { getDb } from "@brain/db";
 import Verdict from "./Verdict";
 
 export const runtime = "nodejs";

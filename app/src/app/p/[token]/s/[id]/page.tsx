@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getDb } from "@/lib/db";
+import { getDb } from "@brain/db";
 import Candidates from "./Candidates";
 import Player from "./Player";
 

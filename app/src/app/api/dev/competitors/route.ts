@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { screenSuggestions } from "@/lib/competitors";
+import { screenSuggestions } from "@brain/competitors";
 
 export const runtime = "nodejs";
 

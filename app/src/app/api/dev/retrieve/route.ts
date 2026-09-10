@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { resolveProject } from "@/lib/auth";
-import { getDb } from "@/lib/db";
-import { retrieveCandidates } from "@/lib/intent";
-import { resolveAnthropicKey } from "@/lib/secrets";
+import { resolveProject } from "@brain/auth";
+import { getDb } from "@brain/db";
+import { retrieveCandidates } from "@brain/intent";
+import { resolveAnthropicKey } from "@brain/secrets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

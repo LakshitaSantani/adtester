@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { parseEventsForTesting } from "@/lib/market";
+import { parseEventsForTesting } from "@brain/market";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

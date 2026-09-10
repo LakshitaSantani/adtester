@@ -22,7 +22,7 @@
  */
 
 import { getFile, type RepoRef } from "./github";
-import type { IntentMatch } from "./intent";
+import type { IntentMatch } from "@brain/intent";
 
 /** A patch bigger than this stops being checkable at a glance. */
 const MAX_FIX_LINES = 40;

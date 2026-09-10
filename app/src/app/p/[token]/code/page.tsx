@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { resolveProject } from "@/lib/auth";
-import { getDb } from "@/lib/db";
+import { resolveProject } from "@brain/auth";
+import { getDb } from "@brain/db";
 import { ensureWorker } from "@/lib/worker";
 import ConnectRepo from "./ConnectRepo";
 

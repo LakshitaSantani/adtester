@@ -17,18 +17,18 @@ import { Readable } from "node:stream";
 import { createGunzip } from "node:zlib";
 
 import { candidatesForSession } from "./candidates";
-import { decrypt } from "./crypto";
-import { getDb } from "./db";
+import { decrypt } from "@brain/crypto";
+import { getDb } from "@brain/db";
 import * as gh from "./github";
-import { importFromPostHog } from "./import-posthog";
+import { importFromPostHog } from "@brain/import-posthog";
 import { investigate } from "./investigate";
 import { mineAliases } from "./aliases";
-import { discoverCompetitors } from "./competitors";
-import { RESEARCH_WINDOW_DAYS, researchCompetitor, saveEvents } from "./market";
-import { loadProfile } from "./profile";
-import { resolveAnthropicKey } from "./secrets";
-import type { PostHogConfig } from "./posthog";
-import { claimNext, fail, finish, type Job } from "./jobs";
+import { discoverCompetitors } from "@brain/competitors";
+import { RESEARCH_WINDOW_DAYS, researchCompetitor, saveEvents } from "@brain/market";
+import { loadProfile } from "@brain/profile";
+import { resolveAnthropicKey } from "@brain/secrets";
+import type { PostHogConfig } from "@brain/posthog";
+import { claimNext, fail, finish, type Job } from "@brain/jobs";
 import {
   apiRoutesInSource,
   classify,
@@ -47,7 +47,7 @@ import {
   saveLexicon,
   type Entity,
 } from "./lexicon";
-import { describeSymptom, detectSymptoms } from "./symptoms";
+import { describeSymptom, detectSymptoms } from "@brain/symptoms";
 
 const POLL_INTERVAL_MS = 3000;
 

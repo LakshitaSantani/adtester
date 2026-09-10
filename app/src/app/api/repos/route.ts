@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { resolveProject } from "@/lib/auth";
-import { getDb } from "@/lib/db";
+import { resolveProject } from "@brain/auth";
+import { getDb } from "@brain/db";
 import { getRepoMeta, parseRepo } from "@/lib/github";
-import { newId } from "@/lib/ids";
-import { enqueue } from "@/lib/jobs";
+import { newId } from "@brain/ids";
+import { enqueue } from "@brain/jobs";
 import { ensureWorker } from "@/lib/worker";
 
 export const runtime = "nodejs";

@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { resolveProject } from "@/lib/auth";
-import { getDb } from "@/lib/db";
-import { getSecret, maskKey } from "@/lib/secrets";
+import { resolveProject } from "@brain/auth";
+import { getDb } from "@brain/db";
+import { getSecret, maskKey } from "@brain/secrets";
 import { ensureWorker } from "@/lib/worker";
-import { draftProfile, loadProfile, rolloutWarning } from "@/lib/profile";
+import { draftProfile, loadProfile, rolloutWarning } from "@brain/profile";
 import ProfileForm from "./Profile";
 import SetupForm, { type SetupState } from "./SetupForm";
 

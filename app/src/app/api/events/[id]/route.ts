@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
-import { eventsExist, readEventStream } from "@/lib/storage";
+import { getDb } from "@brain/db";
+import { eventsExist, readEventStream } from "@brain/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

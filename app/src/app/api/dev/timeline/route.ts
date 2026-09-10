@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
-import { buildTimeline, formatTimeline } from "@/lib/session-timeline";
+import { getDb } from "@brain/db";
+import { buildTimeline, formatTimeline } from "@brain/session-timeline";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

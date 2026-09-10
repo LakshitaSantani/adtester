@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { resolveProject } from "@/lib/auth";
-import { enqueue } from "@/lib/jobs";
-import { draftProfile, loadProfile, saveProfile, type Profile } from "@/lib/profile";
+import { resolveProject } from "@brain/auth";
+import { enqueue } from "@brain/jobs";
+import { draftProfile, loadProfile, saveProfile, type Profile } from "@brain/profile";
 import { ensureWorker } from "@/lib/worker";
 
 export const runtime = "nodejs";

@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { resolveProject } from "@/lib/auth";
-import { getDb } from "@/lib/db";
-import { isCriticalPath, loadProfile } from "@/lib/profile";
+import { resolveProject } from "@brain/auth";
+import { getDb } from "@brain/db";
+import { isCriticalPath, loadProfile } from "@brain/profile";
 import { ensureWorker } from "@/lib/worker";
 import RunInvestigation from "./RunInvestigation";
 

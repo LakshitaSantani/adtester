@@ -20,8 +20,8 @@
  * first place to spend effort.
  */
 
-import { getDb } from "./db";
-import { newId } from "./ids";
+import { getDb } from "@brain/db";
+import { newId } from "@brain/ids";
 
 const SOURCE_EXTENSIONS = /\.(tsx?|jsx?|mjs|cjs|vue|svelte)$/;
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { resolveProject } from "@/lib/auth";
-import { decideSuggestion, pendingSuggestions } from "@/lib/competitors";
-import { enqueue } from "@/lib/jobs";
+import { resolveProject } from "@brain/auth";
+import { decideSuggestion, pendingSuggestions } from "@brain/competitors";
+import { enqueue } from "@brain/jobs";
 import { ensureWorker } from "@/lib/worker";
 
 export const runtime = "nodejs";
