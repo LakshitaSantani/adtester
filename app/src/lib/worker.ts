@@ -23,6 +23,7 @@ import * as gh from "./github";
 import { importFromPostHog } from "./import-posthog";
 import { investigate } from "./investigate";
 import { mineAliases } from "./aliases";
+import { discoverCompetitors } from "./competitors";
 import { RESEARCH_WINDOW_DAYS, researchCompetitor, saveEvents } from "./market";
 import { loadProfile } from "./profile";
 import { resolveAnthropicKey } from "./secrets";
@@ -503,6 +504,43 @@ async function mineProjectAliases(job: Job): Promise<void> {
   }
 }
 
+/**
+ * Go and find out who this company competes with.
+ *
+ * Runs before the market research rather than instead of it: research reads
+ * the confirmed list, and this only ever adds to the pile of suggestions
+ * waiting for a person. Re-running matters as much as the first run — the
+ * competitor worth knowing about is usually the one that did not exist when
+ * the profile was filled in.
+ */
+async function findCompetitors(job: Job): Promise<void> {
+  const apiKey = await resolveAnthropicKey(job.project_id);
+  if (!apiKey) {
+    console.log("discover_competitors: needs an Anthropic key to search");
+    return;
+  }
+
+  const result = await discoverCompetitors(job.project_id, apiKey);
+
+  if (result.proposed === 0) {
+    console.log(
+      "discover_competitors: nothing proposed — either the search found no one " +
+        "new, or the profile has no description to search on",
+    );
+    return;
+  }
+
+  console.log(
+    `discover_competitors: ${result.suggestions.length} of ${result.proposed} kept` +
+      (result.suggestions.length > 0
+        ? ` (${result.suggestions.map((s) => `${s.name} [${s.kind}]`).join(", ")})`
+        : ""),
+  );
+  for (const { name, reason } of result.rejected) {
+    console.log(`discover_competitors: dropped ${name || "(unnamed)"} — ${reason}`);
+  }
+}
+
 const HANDLERS: Record<string, (job: Job) => Promise<void>> = {
   sync_repo: syncRepo,
   index_repo: indexRepo,
@@ -511,6 +549,7 @@ const HANDLERS: Record<string, (job: Job) => Promise<void>> = {
   import_posthog: importPostHog,
   research_market: researchMarket,
   mine_aliases: mineProjectAliases,
+  discover_competitors: findCompetitors,
 };
 
 // Same reasoning as the database singleton: a hot reload must not start a

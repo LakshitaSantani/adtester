@@ -462,6 +462,29 @@ export async function POST(request: Request) {
     ],
   );
 
+  // Two competitors the product went and found, still waiting on a person.
+  //
+  // The second one is the whole argument for doing this: a company that did
+  // not exist when anyone would have filled in the competitors box, and that
+  // nobody in the room has heard of yet.
+  await db.query(`DELETE FROM competitor_suggestions WHERE project_id = $1`, [pid]);
+  const demoSuggestions: Array<[string, string, string, string]> = [
+    ["Meridian Commerce", "established",
+     "Sells hosted checkout and subscription billing to independent retail brands on the same per-transaction model.",
+     "https://example.com/meridian/pricing"],
+    ["Tidewater", "emerging",
+     "Launched in early 2026 doing one-tap checkout for small merchants, undercutting on transaction fees.",
+     "https://example.com/tidewater/about"],
+  ];
+  for (const [name, kind, because, url] of demoSuggestions) {
+    await db.query(
+      `INSERT INTO competitor_suggestions (id, project_id, name, kind, because, url, status)
+       VALUES ($1,$2,$3,$4,$5,$6,'proposed')
+       ON CONFLICT (project_id, name) DO NOTHING`,
+      [newId("cs"), pid, name, kind, because, url],
+    );
+  }
+
   // What the research found, in the table it actually writes to.
   //
   // The real pipeline writes here first, and then copies whatever lands near

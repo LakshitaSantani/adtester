@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { Draft, Profile } from "@/lib/profile";
+import CompetitorSuggestions from "./CompetitorSuggestions";
 
 /**
  * The questions worth asking, and nothing else.
@@ -170,15 +171,21 @@ export default function ProfileForm({
       </p>
 
       <label htmlFor="competitors" style={{ marginTop: 18 }}>
-        Main competitors <span className="muted">— comma separated</span>
+        Main competitors <span className="muted">— comma separated, or leave it to us</span>
       </label>
       <input
         id="competitors"
         type="text"
         value={competitors}
-        placeholder="Not used yet — for looking outside your own code later"
+        placeholder="Northwind Pay, Harbor Checkout"
         onChange={(e) => setCompetitors(e.target.value)}
       />
+      <p className="small muted">
+        Searched for pricing changes, launches and funding around the time each problem
+        started. Never scored — a competitor&apos;s price cut can&apos;t be tested the way
+        a commit can, so it stays context you weigh.
+      </p>
+      <CompetitorSuggestions token={token} />
 
       <label htmlFor="seasonality" style={{ marginTop: 18 }}>
         Anything seasonal we&apos;d misread? <span className="muted">— optional</span>

@@ -126,7 +126,7 @@ export async function POST(request: Request) {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: process.env.ANTHROPIC_MODEL || "claude-3-opus-20240229",
+          model: process.env.ANTHROPIC_MODEL || "claude-opus-5",
           max_tokens: 1,
           messages: [{ role: "user", content: "hi" }],
         }),
@@ -169,6 +169,11 @@ export async function POST(request: Request) {
     // that searches. Every investigation after this one can find a passage
     // that calls the checkout service by the name only this team uses.
     await enqueue(project.id, "mine_aliases");
+
+    // Who to research, before researching them. A first run turns an empty
+    // competitor box into a list to confirm; later runs are how a company
+    // that launched last quarter ever gets noticed.
+    await enqueue(project.id, "discover_competitors");
 
     // Market research runs before the investigation so a finding can be
     // published with its context already attached rather than appearing bare

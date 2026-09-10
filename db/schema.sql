@@ -363,3 +363,32 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS api_paths TEXT[] NOT NULL DEFAULT 
 -- Costs nothing to collect: the sync already fetches each commit's detail for
 -- its file list, and the parents are in the same response.
 ALTER TABLE commits ADD COLUMN IF NOT EXISTS parents TEXT[] NOT NULL DEFAULT '{}';
+
+-- Competitors the product went and found, rather than ones somebody typed in.
+--
+-- Kept apart from company_profile.competitors deliberately. That column is
+-- what the market research actually searches, and it should only ever hold
+-- names a person agreed to. A suggested name that quietly promoted itself
+-- would spend the next month's research budget on a company that may have
+-- nothing to do with this business, and file the results beside real
+-- findings.
+--
+-- Dismissed rows are kept, not deleted, so the same company is not proposed
+-- again every time discovery runs.
+CREATE TABLE IF NOT EXISTS competitor_suggestions (
+  id         TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'established',  -- established | emerging
+  because    TEXT NOT NULL,
+  -- Required. A competitor without a source is a guess wearing a fact's
+  -- clothing, and the screening drops it.
+  url        TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'proposed',     -- proposed | accepted | dismissed
+  found_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at TIMESTAMPTZ,
+  UNIQUE (project_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS competitor_suggestions_pending
+  ON competitor_suggestions (project_id, status);

@@ -149,7 +149,7 @@ If you cannot explain the connection from the evidence given, set
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: process.env.ANTHROPIC_MODEL || "claude-3-opus-20240229",
+        model: process.env.ANTHROPIC_MODEL || "claude-opus-5",
         max_tokens: 3000,
         messages: [{ role: "user", content: prompt }],
       }),
