@@ -53,6 +53,7 @@ function evidenceRank(cf: Counterfactual): number {
 export type DeclineReason =
   | "diffuse"
   /** The page's code was never found, so nothing could be ruled in or out. */
+  | "nothing_to_compare"
   | "no_route"
   /** The code WAS found, and nothing that shipped touches it. */
   | "no_candidates"
@@ -140,13 +141,24 @@ export async function investigate(
     // that touches this page" means there is nothing to do. "We couldn't
     // find this page's code at all" means the setup is incomplete — an
     // unrecognised framework, or the wrong repository — and is fixable.
+    // Three failures wearing one label until now, and they call for
+    // completely different things from the reader.
+    //
+    // Nothing connected at all is the one that was being reported wrongly: a
+    // project with recordings but no repository got told its page's code
+    // wasn't found, which sends someone to check their routes when the real
+    // answer is that we have never seen their code. Worth separating for the
+    // teams who arrive with analytics first and a repository later — or
+    // never, because everything they ship is tracked somewhere that isn't git.
+    const nothingConnected = narrowed === null || narrowed.deployedInWindow === 0;
     const routeUnknown =
+      !nothingConnected &&
       narrowed !== null &&
       narrowed.matchedRoutes.length === 0 &&
       narrowed.matchedApiRoutes.length === 0 &&
       narrowed.path !== null;
     return decline(
-      routeUnknown ? "no_route" : "no_candidates",
+      nothingConnected ? "nothing_to_compare" : routeUnknown ? "no_route" : "no_candidates",
       narrowed?.note ??
         "Nothing that shipped recently touches code this page reaches, so no change here explains it.",
     );

@@ -18,6 +18,11 @@ type EvidenceRow = {
 const DECLINE_EXPLAIN: Record<string, string> = {
   diffuse:
     "The symptom appears on too many different pages to be traced to the code behind any one of them.",
+  nothing_to_compare:
+    "Nothing is connected that could have changed. The symptom below is real and " +
+    "measured — what's missing is a record of what shipped, which is what turns a " +
+    "symptom into a cause. Connect a repository, or anything else that timestamps " +
+    "your changes.",
   no_route:
     "The code behind this page was never found, so nothing could be ruled in or out. " +
     "Usually the repository doesn't serve this URL, or its framework isn't one the " +

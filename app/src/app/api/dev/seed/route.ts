@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   const { token, scenario = "split" } = (await request.json()) as {
     token?: string;
-    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend" | "fix-commit" | "traffic-shift" | "fresh-deploy" | "deep-import" | "rollback";
+    scenario?: "split" | "no-split" | "diffuse" | "no-release" | "spa" | "priority" | "safari" | "backend" | "fix-commit" | "traffic-shift" | "fresh-deploy" | "deep-import" | "rollback" | "no-repo";
   };
   if (!token) return NextResponse.json({ error: "missing token" }, { status: 401 });
 
@@ -248,6 +248,15 @@ export async function POST(request: Request) {
     await db.query(`DELETE FROM commits WHERE project_id = $1 AND sha = 'b7d2e10'`, [pid]);
     await make("b7d2e10", NEW_BUILD_AT, 20, 40, 14, "/checkout");
     await make("a3f91c2", NEW_BUILD_AT, 20, 40, 1, "/checkout");
+  } else if (scenario === "no-repo") {
+    // PostHog connected, no GitHub. Recordings and a real symptom, but no
+    // commits and no lexicon — which is what a team using Linear and Slack
+    // for everything actually looks like on day one.
+    await db.query(`DELETE FROM commits WHERE project_id = $1`, [pid]);
+    await db.query(`DELETE FROM code_entities WHERE project_id = $1`, [pid]);
+    await db.query(`DELETE FROM code_edges WHERE project_id = $1`, [pid]);
+    await make("a3f91c2", NEW_BUILD_AT, 20, 40, 22, "/checkout");
+    await make("b7d2e10", NEW_BUILD_AT, 20, 15, 1, "/checkout");
   } else if (scenario === "rollback") {
     // A bad build served for ninety minutes, spotted, and rolled back.
     //
@@ -399,6 +408,10 @@ export async function POST(request: Request) {
       "against 35% of those without. Every other signal still points at it, so a " +
       "scorer that clamps negative evidence to zero reaches 0.48 and names the " +
       "repair as the cause. It should decline instead.",
+    "no-repo":
+      "Recordings only — no repository connected, so no commits and no lexicon. " +
+      "The symptom is real and detected; the question is what the investigator " +
+      "can honestly say about it with nothing to compare the code against.",
     rollback:
       "A bad build ran for ninety minutes and was rolled back. The rollback commit " +
       "first appears after the change, so by timestamps it counts as carrying it, " +
