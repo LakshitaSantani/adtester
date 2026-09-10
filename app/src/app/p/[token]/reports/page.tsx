@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { resolveProject } from "@/lib/auth";
 import { getDb } from "@/lib/db";
+import { isCriticalPath, loadProfile } from "@/lib/profile";
 import { ensureWorker } from "@/lib/worker";
 import RunInvestigation from "./RunInvestigation";
 
@@ -77,6 +78,44 @@ export default async function ReportsPage({
     return { ...b, total: rows.length, right };
   });
 
+  // What the market research actually found, whether or not any of it landed
+  // near a finding.
+  //
+  // Until now these only appeared inside a report, and only when an event fell
+  // within a fortnight of that symptom starting. Research that turned up
+  // something three weeks out was stored and never seen by anybody, and a run
+  // that found nothing at all looked exactly the same as a run that never
+  // happened. Both of those are the product hiding its own work.
+  const marketEvents = await db.query<{
+    competitor: string;
+    kind: string;
+    occurred_on: string;
+    headline: string;
+    url: string;
+    date_exact: boolean;
+  }>(
+    `SELECT competitor, kind, occurred_on::text, headline, url, date_exact
+       FROM market_events
+      WHERE project_id = $1
+        AND occurred_on >= (now() - interval '60 days')::date
+      ORDER BY occurred_on DESC
+      LIMIT 12`,
+    [project.id],
+  );
+
+  const profile = await loadProfile(project.id);
+
+  /**
+   * The page a symptom happened on, recovered from its description.
+   *
+   * Findings are ordered by what they cost the business before how many
+   * sessions they touched, using the pages marked critical during setup. That
+   * is the right order and an invisible one: a reader sees eight sessions
+   * ranked above forty and has no way to tell a deliberate rule from a bug,
+   * so the rule has to say its own name.
+   */
+  const pathOf = (symptom: string): string | null => symptom.match(/\s(\/\S*)$/)?.[1] ?? null;
+
   const claimed = investigations.filter((i) => i.status === "claimed");
   const declined = investigations.filter((i) => i.status === "declined");
 
@@ -101,6 +140,20 @@ export default async function ReportsPage({
       </p>
 
       <RunInvestigation token={token} />
+
+      {profile?.seasonality && (
+        <div className="ev-block" style={{ marginBottom: 18 }}>
+          <div className="ev-kind">Seasonality you told us about</div>
+          <div className="ev-body">
+            <div>{profile.seasonality}</div>
+            <div className="small muted" style={{ marginTop: 6 }}>
+              This never suppresses a finding on its own — a real regression during a
+              quiet month is still a regression — so it travels with every report below
+              for you to weigh.
+            </div>
+          </div>
+        </div>
+      )}
 
       {scored.length > 0 && (
         <>
@@ -164,7 +217,17 @@ export default async function ReportsPage({
             return (
               <Link key={inv.id} href={`/p/${token}/reports/${inv.id}`} className="report-card">
                 <div className="report-top">
-                  <span className="report-symptom">{inv.symptom}</span>
+                  <span className="report-symptom">
+                    {inv.symptom}
+                    {isCriticalPath(pathOf(inv.symptom), profile) && (
+                      <span
+                        className="crit-tag"
+                        title="You marked this page as one that matters, so it ranks above busier problems that don't"
+                      >
+                        critical page
+                      </span>
+                    )}
+                  </span>
                   <span className={`conf ${b.cls}`}>
                     {(inv.confidence ?? 0).toFixed(2)} · {b.label}
                   </span>
@@ -206,6 +269,56 @@ export default async function ReportsPage({
             </>
           )}
         </>
+      )}
+
+      <h2>What was happening outside your code</h2>
+      <p className="lede small">
+        {(profile?.competitors ?? []).length > 0
+          ? `Public sources, searched for ${(profile?.competitors ?? []).join(", ")}. ` +
+            `Never scored — there is no way to test what would have happened without a ` +
+            `competitor's price change, so this is context you weigh rather than a cause ` +
+            `anything here argues for.`
+          : "Nothing to search for yet. Name your competitors in setup and this fills in."}
+      </p>
+
+      {marketEvents.length > 0 ? (
+        <div className="tablecard">
+          <table>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Who</th>
+                <th>What</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {marketEvents.map((e) => (
+                <tr key={`${e.competitor}${e.occurred_on}${e.headline}`}>
+                  <td className="mono small">
+                    {e.occurred_on}
+                    {!e.date_exact && <span className="muted"> approx</span>}
+                  </td>
+                  <td>{e.competitor}</td>
+                  <td>{e.headline}</td>
+                  <td className="right small">
+                    <a href={e.url} target="_blank" rel="noreferrer">
+                      source
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        (profile?.competitors ?? []).length > 0 && (
+          <p className="small muted">
+            The last search found nothing verifiable in the window. Claims without a date
+            and a working link are dropped rather than reported, so an empty table here
+            means the search ran and kept nothing — not that nothing happened.
+          </p>
+        )
       )}
     </div>
   );

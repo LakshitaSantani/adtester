@@ -32,6 +32,24 @@ export async function POST(request: Request) {
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const pid = project.id;
+
+  // Let anything already running finish before pulling the rug.
+  //
+  // Seeding wipes investigations, and an investigate job still writing its
+  // evidence then hits a foreign key that vanished underneath it and fails
+  // the whole run. It looks exactly like the brain breaking on the scenario
+  // being seeded, which is the most misleading thing a test fixture can do —
+  // it sent me looking for a scoring bug that did not exist.
+  for (let i = 0; i < 60; i++) {
+    const busy = await db.one<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM jobs
+        WHERE project_id = $1 AND status IN ('pending', 'running')`,
+      [pid],
+    );
+    if ((busy?.n ?? 0) === 0) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+
   for (const table of ["evidence", "investigations", "sessions", "code_edges", "code_entities", "commits"]) {
     await db.query(
       table === "evidence"

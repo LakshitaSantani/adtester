@@ -438,6 +438,68 @@ export async function POST(request: Request) {
     );
   }
 
+  // The company profile, so the parts of the product that depend on knowing
+  // what this business is show what they look like: findings on a critical
+  // page ranked above busier ones and labelled as such, the seasonality
+  // caveat travelling with every report, and market research that has
+  // competitors to search for.
+  await db.query(`DELETE FROM company_profile WHERE project_id = $1`, [pid]);
+  await db.query(
+    `INSERT INTO company_profile
+       (project_id, what_we_do, customers, revenue_model, critical_paths,
+        rollout, competitors, seasonality, confirmed_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())`,
+    [
+      pid,
+      "Online storefront for independent brands — catalogue, checkout and subscriptions.",
+      "Small retail businesses in the US and EU, mostly on mobile.",
+      "Take a percentage of each transaction, plus a monthly plan fee.",
+      ["/checkout", "/pricing"],
+      "gradual",
+      ["Northwind Pay", "Harbor Checkout"],
+      "Traffic falls by about a third through August and recovers in September, " +
+        "so a quiet month is not necessarily a broken one.",
+    ],
+  );
+
+  // What the research found, in the table it actually writes to.
+  //
+  // The real pipeline writes here first, and then copies whatever lands near
+  // a symptom onto that finding as evidence. The demo used to write only the
+  // second half, so the standalone view stayed empty and the two halves
+  // disagreed about whether any research had happened at all.
+  await db.query(`DELETE FROM market_events WHERE project_id = $1`, [pid]);
+  const demoMarket: Array<[string, string, number, string, string, string, boolean]> = [
+    ["Northwind Pay", "pricing", 23,
+     "Northwind Pay dropped its transaction fee to 1.4%",
+     "Announced on their pricing page.",
+     "https://example.com/northwind/pricing", true],
+    ["Harbor Checkout", "launch", 21,
+     "Harbor Checkout launched one-tap guest checkout",
+     "Date taken from the press release itself.",
+     "https://example.com/harbor/press/guest-checkout", true],
+    ["Northwind Pay", "feature", 34,
+     "Northwind Pay added saved cards across merchants",
+     "Found on their changelog; the entry is dated only by month.",
+     "https://example.com/northwind/changelog", false],
+    ["Harbor Checkout", "funding", 47,
+     "Harbor Checkout raised a $40m Series B",
+     "Nothing here connects to your numbers — it is here because it happened.",
+     "https://example.com/harbor/series-b", true],
+  ];
+  for (const [competitor, kind, daysAgo, headline, detail, url, exact] of demoMarket) {
+    await db.query(
+      `INSERT INTO market_events
+         (id, project_id, competitor, kind, occurred_on, headline, detail, url, date_exact)
+       VALUES ($1,$2,$3,$4,$5::date,$6,$7,$8,$9)`,
+      [
+        newId("mkt"), pid, competitor, kind,
+        new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10),
+        headline, detail, url, exact,
+      ],
+    );
+  }
+
   // 1. The full worked example: high confidence, intent, analysis, a fix.
   await addInvestigation({
     symptom: "field retry on /checkout",
