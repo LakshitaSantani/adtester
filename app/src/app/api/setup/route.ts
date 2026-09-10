@@ -5,7 +5,7 @@ import { getDb } from "@/lib/db";
 import { getRepoMeta, parseRepo } from "@/lib/github";
 import { newId } from "@/lib/ids";
 import { enqueue } from "@/lib/jobs";
-import { verify, type PostHogConfig } from "@/lib/posthog";
+import { verify, normaliseProjectId, type PostHogConfig } from "@/lib/posthog";
 import { saveSecret } from "@/lib/secrets";
 import { ensureWorker } from "@/lib/worker";
 
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
   if (body.posthog?.projectId && body.posthog?.apiKey) {
     const config: PostHogConfig = {
       host: body.posthog.host?.trim() || "https://us.i.posthog.com",
-      projectId: body.posthog.projectId.trim(),
+      projectId: normaliseProjectId(body.posthog.projectId),
       apiKey: body.posthog.apiKey.trim(),
     };
     try {
@@ -126,7 +126,7 @@ export async function POST(request: Request) {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-opus-5",
+          model: process.env.ANTHROPIC_MODEL || "claude-3-opus-20240229",
           max_tokens: 1,
           messages: [{ role: "user", content: "hi" }],
         }),

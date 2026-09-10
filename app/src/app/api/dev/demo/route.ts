@@ -190,6 +190,38 @@ export async function POST(request: Request) {
       occurredAt: string;
     }>;
     analysis?: Record<string, unknown>;
+    /**
+     * Who the problem lands on, when it lands unevenly.
+     *
+     * Held as evidence rows like everything else, so the report can show the
+     * lift alongside the claim rather than asserting "mostly Safari" in prose
+     * nobody can check.
+     */
+    cohorts?: Array<{
+      dimension: string;
+      value: string;
+      lift: number;
+      summary: string;
+    }>;
+    /**
+     * What was happening outside the code that week.
+     *
+     * Never scored — contribution stays NULL rather than 0. There is no way
+     * to run the counterfactual on a competitor's price change, so this can
+     * only ever be context for a person to weigh, and the difference between
+     * "explains nothing" and "was never allowed to explain anything" has to
+     * survive into the data.
+     */
+    market?: Array<{
+      competitor: string;
+      kind: string;
+      headline: string;
+      detail: string;
+      url: string;
+      daysBefore: number;
+      occurredOn: string;
+      dateExact: boolean;
+    }>;
     verdict?: { correct: boolean; note: string };
   }) => {
     const id = newId("inv");
@@ -291,6 +323,40 @@ export async function POST(request: Request) {
       );
     }
 
+    for (const c of opts.cohorts ?? []) {
+      await db.query(
+        `INSERT INTO evidence (id, investigation_id, kind, ref, quote, detail, contribution)
+         VALUES ($1,$2,'cohort',NULL,$3,$4,0)`,
+        [
+          newId("ev"),
+          id,
+          c.summary,
+          JSON.stringify({ dimension: c.dimension, value: c.value, lift: c.lift }),
+        ],
+      );
+    }
+
+    for (const e of opts.market ?? []) {
+      await db.query(
+        `INSERT INTO evidence (id, investigation_id, kind, ref, quote, detail, contribution)
+         VALUES ($1,$2,'market',$3,$4,$5,NULL)`,
+        [
+          newId("ev"),
+          id,
+          e.url,
+          e.headline,
+          JSON.stringify({
+            competitor: e.competitor,
+            eventKind: e.kind,
+            occurredOn: e.occurredOn,
+            daysBefore: e.daysBefore,
+            detail: e.detail,
+            dateExact: e.dateExact,
+          }),
+        ],
+      );
+    }
+
     if (opts.verdict) {
       await db.query(
         `INSERT INTO feedback (investigation_id, was_correct, note) VALUES ($1,$2,$3)`,
@@ -298,6 +364,79 @@ export async function POST(request: Request) {
       );
     }
   };
+
+  const hoursAgo24 = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+
+  // The connected-repository state, so the Code page shows what it looks like
+  // once a repository has been synced rather than its empty setup form. The
+  // token is a placeholder — nothing here talks to GitHub.
+  await db.query(`DELETE FROM repos WHERE project_id = $1`, [pid]);
+  await db.query(
+    `INSERT INTO repos
+       (id, project_id, owner, name, default_branch, access_token, last_synced_at)
+     VALUES ($1,$2,'northwind','storefront','main','demo-not-a-real-token',$3)`,
+    [newId("repo"), pid, hoursAgo24(0.5)],
+  );
+
+  await db.query(`DELETE FROM code_entities WHERE project_id = $1`, [pid]);
+  const demoFiles: Array<[string, string, string | null]> = [
+    ["app/checkout/page.tsx", "route", "/checkout"],
+    ["app/account/page.tsx", "route", "/account"],
+    ["app/pricing/page.tsx", "route", "/pricing"],
+    ["app/search/page.tsx", "route", "/search"],
+    ["services/api/checkout.py", "api", "/api/checkout/validate"],
+    ["src/checkout/CheckoutForm.tsx", "component", null],
+    ["src/checkout/validation.ts", "module", null],
+    ["src/checkout/PhoneInput.tsx", "component", null],
+    ["src/account/ProfileForm.tsx", "component", null],
+    ["src/pricing/PlanPicker.tsx", "component", null],
+    ["src/analytics/tracker.ts", "module", null],
+  ];
+  for (const [path, kind, route] of demoFiles) {
+    const name = path.split("/").pop()!.replace(/\.\w+$/, "");
+    await db.query(
+      `INSERT INTO code_entities (id, project_id, path, kind, name, route, aliases)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [newId("ce"), pid, path, kind, name, route, [name.toLowerCase()]],
+    );
+  }
+
+  await db.query(`DELETE FROM commits WHERE project_id = $1`, [pid]);
+  const demoCommits: Array<[string, number, string, string, string[]]> = [
+    ["a3f91c2", 21, "priya", "Tighten phone validation", ["src/checkout/validation.ts"]],
+    ["c1a5f83", 45, "marco", "Add avatar upload to profiles", ["src/account/ProfileForm.tsx"]],
+    ["e2d70b4", 69, "priya", "Rework the plan picker layout", ["src/pricing/PlanPicker.tsx"]],
+    ["d4b8e29", 21, "sam", "Bump analytics sampling", ["src/analytics/tracker.ts"]],
+    ["b7d2e10", 168, "priya", "Restyle the checkout form", ["src/checkout/CheckoutForm.tsx"]],
+  ];
+  for (const [sha, hoursAgo, author, message, touched] of demoCommits) {
+    await db.query(
+      `INSERT INTO commits
+         (project_id, sha, authored_at, deployed_at, author, message, files_touched, parents)
+       VALUES ($1,$2,$3,$3,$4,$5,$6,'{}')`,
+      [pid, sha, hoursAgo24(hoursAgo), author, message, touched],
+    );
+  }
+
+  // A finished run of the queue, so the jobs panel shows the pipeline that
+  // produced everything above rather than an empty table.
+  await db.query(`DELETE FROM jobs WHERE project_id = $1`, [pid]);
+  const demoJobs: Array<[string, number]> = [
+    ["import_posthog", 34],
+    ["sync_repo", 33],
+    ["index_repo", 33],
+    ["mine_aliases", 32],
+    ["research_market", 32],
+    ["investigate", 31],
+  ];
+  for (const [kind, minutesAgo] of demoJobs) {
+    await db.query(
+      `INSERT INTO jobs
+       (id, project_id, kind, payload, status, attempts, created_at, completed_at)
+     VALUES ($1,$2,$3,'{}'::jsonb,'done',1,$4,$4)`,
+      [newId("job"), pid, kind, hoursAgo24(minutesAgo / 60)],
+    );
+  }
 
   // 1. The full worked example: high confidence, intent, analysis, a fix.
   await addInvestigation({
@@ -340,6 +479,50 @@ export async function POST(request: Request) {
           ["volume", "Volume", "22 sessions affected.", 0.12],
           ["dilution", "Other candidates", "1 other change could explain this equally well.", -0.08],
         ],
+      },
+    ],
+    market: [
+      {
+        competitor: "Northwind Pay",
+        kind: "pricing",
+        headline: "Northwind Pay dropped its transaction fee to 1.4%",
+        detail:
+          "Announced on their pricing page three days before this symptom started. " +
+          "Nothing here says it moved your users — only that it happened, and when.",
+        url: "https://example.com/northwind/pricing",
+        daysBefore: 3,
+        occurredOn: new Date(Date.now() - 23 * 86_400_000).toISOString().slice(0, 10),
+        dateExact: true,
+      },
+      {
+        competitor: "Harbor Checkout",
+        kind: "launch",
+        headline: "Harbor Checkout launched one-tap guest checkout",
+        detail:
+          "Date taken from the press release itself rather than inferred from when " +
+          "it was found.",
+        url: "https://example.com/harbor/press/guest-checkout",
+        daysBefore: 1,
+        occurredOn: new Date(Date.now() - 21 * 86_400_000).toISOString().slice(0, 10),
+        dateExact: true,
+      },
+    ],
+    cohorts: [
+      {
+        dimension: "Browser",
+        value: "Safari 17",
+        lift: 2.4,
+        summary:
+          "31 of the 40 affected sessions were on Safari 17, which is 22% of traffic " +
+          "to this page — 2.4x the rate everyone else sees.",
+      },
+      {
+        dimension: "Device",
+        value: "iPhone",
+        lift: 1.9,
+        summary:
+          "28 of 40 on iPhone against 34% of traffic to this page. Consistent with " +
+          "the browser split rather than separate from it.",
       },
     ],
     intent: [

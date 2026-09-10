@@ -3,7 +3,7 @@ import { resolveProject } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/ids";
 import { enqueue } from "@/lib/jobs";
-import { verify, type PostHogConfig } from "@/lib/posthog";
+import { verify, normaliseProjectId, type PostHogConfig } from "@/lib/posthog";
 import { ensureWorker } from "@/lib/worker";
 
 export const runtime = "nodejs";
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
 
   const config: PostHogConfig = {
     host: body.host?.trim() || "https://us.i.posthog.com",
-    projectId: (body.projectId ?? "").trim(),
+    projectId: normaliseProjectId(body.projectId ?? ""),
     apiKey: (body.apiKey ?? "").trim(),
   };
 

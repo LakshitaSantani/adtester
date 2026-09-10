@@ -42,9 +42,16 @@ export class PostHogError extends Error {
 }
 
 function normaliseHost(host: string): string {
-  const trimmed = host.trim().replace(/\/+$/, "");
-  if (!/^https?:\/\//.test(trimmed)) return `https://${trimmed}`;
+  let trimmed = host.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//.test(trimmed)) trimmed = `https://${trimmed}`;
+  trimmed = trimmed.replace("https://us.posthog.com", "https://us.i.posthog.com");
+  trimmed = trimmed.replace("https://eu.posthog.com", "https://eu.i.posthog.com");
   return trimmed;
+}
+
+export function normaliseProjectId(input: string): string {
+  const match = input.match(/\/project(?:s)?\/(\d+)/) || input.match(/(\d+)/);
+  return match ? match[1] : input.trim();
 }
 
 async function api<T>(
@@ -52,7 +59,8 @@ async function api<T>(
   path: string,
   params?: Record<string, string>,
 ): Promise<T> {
-  const url = new URL(`${normaliseHost(config.host)}/api/projects/${config.projectId}${path}`);
+  const projectId = normaliseProjectId(config.projectId);
+  const url = new URL(`${normaliseHost(config.host)}/api/projects/${projectId}${path}`);
   for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
 
   const response = await fetch(url, {

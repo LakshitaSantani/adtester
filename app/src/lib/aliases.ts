@@ -278,7 +278,7 @@ async function propose(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-opus-5",
+        model: process.env.ANTHROPIC_MODEL || "claude-3-opus-20240229",
         max_tokens: 2000,
         messages: [{ role: "user", content: buildPrompt(fileList, corpus) }],
       }),

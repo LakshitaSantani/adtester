@@ -99,7 +99,7 @@ the source.`;
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: process.env.ANTHROPIC_MODEL || "claude-3-7-sonnet-20250219",
+        model: process.env.ANTHROPIC_MODEL || "claude-3-opus-20240229",
         max_tokens: 4000,
         tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 6 }],
         messages: [{ role: "user", content: prompt }],
