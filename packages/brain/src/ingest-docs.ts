@@ -55,12 +55,26 @@ export async function ingestDocument(
   const title = firstHeading(text) ?? filename.replace(/\.[^.]+$/, "");
   const resolvedKind = transcript ? "transcript" : "prd";
 
-  // Re-uploading the same file replaces it. Documents get revised, and two
+  // Re-ingesting the same thing replaces it. Documents get revised, and two
   // copies of a PRD would both match and double-count as evidence.
-  const existing = await db.one<{ id: string }>(
-    `SELECT id FROM documents WHERE project_id = $1 AND title = $2 AND source = $3`,
-    [projectId, title, source ?? resolvedKind],
-  );
+  //
+  // Identity is the URL when there is one, and the title otherwise. An upload
+  // has only its name to be known by; anything a connector fetched has a
+  // canonical address, and that is a far better key. Two Slack threads in the
+  // same channel on the same day can easily produce the same title, and
+  // matching on it would have one silently replace the other — losing a
+  // conversation with nothing to show that it happened. Equally, a thread
+  // re-read tomorrow to pick up its new replies must land on the same row
+  // rather than becoming a second copy that double-counts as evidence.
+  const existing = url
+    ? await db.one<{ id: string }>(
+        `SELECT id FROM documents WHERE project_id = $1 AND url = $2`,
+        [projectId, url],
+      )
+    : await db.one<{ id: string }>(
+        `SELECT id FROM documents WHERE project_id = $1 AND title = $2 AND source = $3`,
+        [projectId, title, source ?? resolvedKind],
+      );
   if (existing) {
     await db.query(`DELETE FROM chunks WHERE document_id = $1`, [existing.id]);
     await db.query(`DELETE FROM documents WHERE id = $1`, [existing.id]);

@@ -36,6 +36,17 @@ const LOOKBACK_DAYS_TRANSCRIPT = 28;
 const LOOKBACK_DAYS_DOCUMENT = 120;
 
 /**
+ * How far back retrieval reaches, for whoever has to fetch that history.
+ *
+ * Exported so a connector can work out its own fetch window from the numbers
+ * that actually govern retrieval, instead of a constant somebody picked once
+ * and nobody kept in step. See window.ts, which does the arithmetic.
+ */
+export function retrievalLookbackDays(): { transcript: number; document: number } {
+  return { transcript: LOOKBACK_DAYS_TRANSCRIPT, document: LOOKBACK_DAYS_DOCUMENT };
+}
+
+/**
  * A single matching word is worth considering. Two was too strict: it threw
  * away "the phone field is rejecting people", which scores 1 and is exactly
  * the sort of thing we are looking for. The model does the judging; this

@@ -392,3 +392,42 @@ CREATE TABLE IF NOT EXISTS competitor_suggestions (
 
 CREATE INDEX IF NOT EXISTS competitor_suggestions_pending
   ON competitor_suggestions (project_id, status);
+
+-- ------------------------------------------------------------------ slack
+
+-- Which channels to read, and how far each has been read.
+--
+-- The watermark is what stops the product asking anyone for a date. A first
+-- sync reaches back as far as the engine can still use (see window.ts); every
+-- sync after that resumes from here, minus an overlap, because a thread keeps
+-- gaining replies after we first read it and the reply is usually the
+-- decision.
+--
+-- Channels are listed whether or not they are enabled, so setup can show the
+-- workspace and let someone tick the ones worth reading rather than asking
+-- for channel IDs.
+CREATE TABLE IF NOT EXISTS slack_channels (
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  channel_id     TEXT NOT NULL,
+  name           TEXT NOT NULL,
+  is_private     BOOLEAN NOT NULL DEFAULT false,
+  members        INTEGER NOT NULL DEFAULT 0,
+  -- Nothing is read until somebody says so. A workspace has channels nobody
+  -- would want indexed, and the default has to be the quiet one.
+  enabled        BOOLEAN NOT NULL DEFAULT false,
+  -- The newest message timestamp successfully ingested from this channel.
+  last_ts        TEXT,
+  last_synced_at TIMESTAMPTZ,
+  last_error     TEXT,
+  PRIMARY KEY (project_id, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS slack_channels_enabled
+  ON slack_channels (project_id, enabled);
+
+
+-- A connector-fetched document is identified by its address, not its title.
+-- Two Slack threads in one channel on one day produce the same title, and
+-- matching on that would have one replace the other silently.
+CREATE INDEX IF NOT EXISTS documents_url
+  ON documents (project_id, url);
