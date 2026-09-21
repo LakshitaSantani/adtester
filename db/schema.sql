@@ -431,3 +431,54 @@ CREATE INDEX IF NOT EXISTS slack_channels_enabled
 -- matching on that would have one replace the other silently.
 CREATE INDEX IF NOT EXISTS documents_url
   ON documents (project_id, url);
+
+-- ------------------------------------------------------------------ linear
+
+-- The "commits" table for a team with no repository: issues, and the moment
+-- each one shipped.
+--
+-- moved_to_completed_at is not completedAt from Linear's own API. completedAt
+-- is when the issue itself was marked complete, which is a property of the
+-- issue; moved_to_completed_at is read from that issue's history as the
+-- createdAt of the specific transition into a "completed"-type state, which
+-- is what actually happened at that moment and is what the counterfactual
+-- splits users on. They usually agree. When an issue is reopened and
+-- recompleted, or moved through several states quickly, they can differ by
+-- more than rounding — and the history entry is the one that is true of the
+-- moment being investigated.
+--
+-- state_type is Linear's own classification (triage, backlog, unstarted,
+-- started, completed, canceled, duplicate) captured at sync time. Only
+-- "completed" issues are candidates for having shipped something; the others
+-- are kept so a report can say what an issue was doing instead, the way the
+-- git product lists every commit in the window even ones that touched
+-- nothing relevant.
+CREATE TABLE IF NOT EXISTS linear_issues (
+  id                    TEXT NOT NULL,
+  project_id            TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  identifier            TEXT NOT NULL,       -- "ENG-482", what a person recognises
+  title                 TEXT NOT NULL,
+  description           TEXT,
+  state_type            TEXT NOT NULL,
+  moved_to_completed_at TIMESTAMPTZ,
+  created_at            TIMESTAMPTZ,
+  updated_at            TIMESTAMPTZ,
+  team_key              TEXT,
+  labels                TEXT[] NOT NULL DEFAULT '{}',
+  assignee              TEXT,
+  url                   TEXT,
+  PRIMARY KEY (project_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS linear_issues_completed
+  ON linear_issues (project_id, moved_to_completed_at DESC);
+
+-- Per-project watermark for the issue sync. A project rather than a channel,
+-- because unlike Slack there is one workspace and one meaningful stream of
+-- issues to page through — nothing here is opted in or out per team the way
+-- a Slack channel is per conversation.
+CREATE TABLE IF NOT EXISTS linear_sync_state (
+  project_id     TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  last_synced_at TIMESTAMPTZ,
+  last_error     TEXT
+);

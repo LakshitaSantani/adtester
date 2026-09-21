@@ -18,7 +18,7 @@ import { decrypt, encrypt } from "./crypto";
 import { getDb } from "./db";
 import { newId } from "./ids";
 
-export type SecretKind = "anthropic";
+export type SecretKind = "anthropic" | "linear" | "slack";
 
 export async function saveSecret(
   projectId: string,

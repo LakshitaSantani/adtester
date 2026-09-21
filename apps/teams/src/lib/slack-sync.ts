@@ -16,17 +16,8 @@
 import { ingestDocument } from "@brain/ingest-docs";
 import { getDb } from "@brain/db";
 import { syncSince } from "@brain/window";
+import { CHANGE_WINDOW_DAYS } from "./linear-sync";
 import { fetchThreads, fetchUsers, listChannels, verifyToken } from "./slack";
-
-/**
- * How old a Linear issue can be and still be a candidate.
- *
- * The equivalent of the git product's commit window. Issues carry real
- * timestamps for when work moved state, so this is the shorter of the two
- * windows that product uses rather than the thirty-day allowance it makes for
- * commits whose deploy time is a guess.
- */
-export const CHANGE_WINDOW_DAYS = 14;
 
 export type SyncSummary = {
   channels: number;
